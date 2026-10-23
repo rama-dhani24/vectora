@@ -1,0 +1,6 @@
+.next
+node_modules
+functions/lib
+functions/node_modules
+package-lock.json
+.emulator-data

@@ -1,0 +1,95 @@
+{
+  "app": {
+    "title": "Vectora",
+    "subtitle": "Mfumo wa Usimamizi wa Uwekezaji wa Kikundi",
+    "tagline": "Changamoto ya Uwekezaji Tanzania"
+  },
+  "nav": {
+    "dashboard": "Dashibodi",
+    "challenges": "Changamoto",
+    "transactions": "Miamala",
+    "investors": "Wawekezaji",
+    "reports": "Ripoti",
+    "import": "Ingiza",
+    "settings": "Mipangilio",
+    "logout": "Ondoka",
+    "openMenu": "Fungua menyu",
+    "mainNavigation": "Menyu kuu"
+  },
+  "common": {
+    "save": "Hifadhi",
+    "cancel": "Ghairi",
+    "create": "Unda",
+    "loading": "Inapakia…",
+    "language": "Lugha",
+    "theme": "Mandhari",
+    "light": "Mwanga",
+    "dark": "Giza",
+    "system": "Mfumo",
+    "units": "Vipande",
+    "stockMarket": "Soko la Hisa",
+    "total": "Jumla",
+    "comingSoon": "Inakuja katika Hatua ya {milestone}",
+    "comingSoonBody": "Sehemu hii iko kwenye mpango na itajengwa katika Hatua ya {milestone}."
+  },
+  "roles": {
+    "super_admin": "Msimamizi Mkuu",
+    "admin": "Msimamizi",
+    "viewer": "Mtazamaji"
+  },
+  "auth": {
+    "signInTitle": "Ingia kwenye Vectora",
+    "signInSubtitle": "Wasimamizi pekee. Omba akaunti kwa Msimamizi Mkuu.",
+    "email": "Barua pepe",
+    "password": "Nenosiri",
+    "signIn": "Ingia",
+    "signingIn": "Inaingia…",
+    "invalidCredentials": "Barua pepe au nenosiri si sahihi.",
+    "noRole": "Akaunti hii haina jukumu la Vectora. Omba Msimamizi Mkuu akupe ruhusa.",
+    "disabled": "Akaunti hii imezimwa.",
+    "genericError": "Imeshindikana kuingia. Jaribu tena.",
+    "tooManyRequests": "Majaribio mengi mno. Subiri kidogo kisha ujaribu tena.",
+    "emailInvalid": "Weka barua pepe sahihi",
+    "passwordRequired": "Nenosiri linahitajika",
+    "signedOut": "Umetoka kwenye mfumo."
+  },
+  "dashboard": {
+    "welcome": "Karibu tena, {name}",
+    "currentChallenge": "Changamoto iliyo wazi sasa",
+    "noOpenChallenge": "Bado hakuna changamoto iliyo wazi. Changamoto zinakuja katika Hatua ya 4.",
+    "totalInvested": "Jumla iliyowekezwa",
+    "participants": "Washiriki"
+  },
+  "pages": {
+    "challenges": "Unda awamu za kila mwezi, zifungue na kuzifunga, na zuia mabadiliko awamu ikifungwa.",
+    "transactions": "Uingizaji wa haraka kwa simu, uthibitisho wa picha, kugundua marudio, uhakiki na kumbukumbu za mabadiliko.",
+    "investors": "Simamia majina ya wawekezaji, simu, maelezo na hali, pamoja na kuingiza kwa wingi.",
+    "reports": "Muhtasari wa changamoto kama Excel, taarifa, ulinganisho na kupakua Excel/PDF.",
+    "import": "Pakia faili la Excel lililopo, linganisha wawekezaji na hakiki jumla kabla ya kuingiza."
+  },
+  "settings": {
+    "title": "Mipangilio",
+    "profile": "Wasifu wako",
+    "users": "Watumiaji na majukumu",
+    "usersDescription": "Msimamizi Mkuu pekee ndiye anaweza kuongeza watumiaji na kubadilisha majukumu. Majukumu huhifadhiwa kama Firebase custom claims na kunakiliwa kwenye Firestore.",
+    "addUser": "Ongeza mtumiaji",
+    "name": "Jina",
+    "email": "Barua pepe",
+    "role": "Jukumu",
+    "status": "Hali",
+    "active": "Hai",
+    "disabled": "Imezimwa",
+    "temporaryPassword": "Nenosiri la muda",
+    "passwordHint": "Angalau herufi 8. Mpe kwa faragha; ataweza kulibadilisha baadaye.",
+    "changeRole": "Badilisha jukumu",
+    "disable": "Zima",
+    "enable": "Washa",
+    "you": "Wewe",
+    "userCreated": "Mtumiaji ameundwa",
+    "roleUpdated": "Jukumu limebadilishwa",
+    "statusUpdated": "Hali imebadilishwa",
+    "noUsers": "Bado hakuna watumiaji.",
+    "readOnly": "Unaweza kuona wasifu wako. Msimamizi Mkuu pekee ndiye anasimamia watumiaji.",
+    "cannotChangeSelf": "Huwezi kubadilisha jukumu au hali yako mwenyewe."
+  }
+}

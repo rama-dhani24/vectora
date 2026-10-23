@@ -1,0 +1,61 @@
+rules_version = '2';
+
+// Roles come from the verified custom claim `role` (set only by server code / seed script).
+// users/{uid} is a read-only mirror for the UI; clients can never write it.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function role() {
+      return signedIn() && request.auth.token.role is string ? request.auth.token.role : '';
+    }
+    function isViewer() {
+      return role() in ['viewer', 'admin', 'super_admin'];
+    }
+    function isAdmin() {
+      return role() in ['admin', 'super_admin'];
+    }
+    function isSuperAdmin() {
+      return role() == 'super_admin';
+    }
+
+    match /users/{uid} {
+      allow read: if isSuperAdmin() || (signedIn() && request.auth.uid == uid);
+      allow write: if false;
+    }
+
+    // Module collections. Field-level validation (amount > 0, types, closed-challenge locks)
+    // is completed in Milestones 3-5 and 9 together with the write paths that use them.
+    match /investors/{investorId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /challenges/{challengeId} {
+      allow read: if isViewer();
+      allow write: if false;
+
+      // Maintained only by Cloud Functions (Admin SDK bypasses rules).
+      match /investorTotals/{investorId} {
+        allow read: if isViewer();
+        allow write: if false;
+      }
+    }
+
+    match /transactions/{txId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
