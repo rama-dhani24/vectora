@@ -79,7 +79,8 @@ Roles: `super_admin` (everything, manages users), `admin` (manages data), `viewe
 | `npm run typecheck`                                     | TypeScript (`tsc --noEmit`)                   |
 | `npm test`                                              | Vitest unit tests                             |
 | `npm run format`                                        | Prettier                                      |
-| `npm run emulators`                                     | Firebase Emulator Suite with data persistence |
+| `npm run emulators`                                     | Firebase Emulator Suite (saves data on exit)  |
+| `npm run emulators:resume`                              | Emulators, reloading the data saved last time |
 | `npm run seed:admin -- --email … --password … --name …` | Create or promote a Super Admin               |
 
 ## Project structure
