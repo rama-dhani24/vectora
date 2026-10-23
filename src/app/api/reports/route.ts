@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { createElement } from "react";
 import { Document, renderToBuffer } from "@react-pdf/renderer";
+import { z } from "zod";
 import { assertRole } from "@/lib/auth/dal";
 import { aggregateTransactions } from "@/lib/domain/aggregation";
 import { adminDb } from "@/lib/firebase/admin";
@@ -24,7 +25,41 @@ export async function GET(request: Request): Promise<Response> {
   const format = url.searchParams.get("format");
   if (url.searchParams.get("scope") === "transactions") {
     if (format !== "xlsx") return responseError(400, "Unsupported transaction export format.");
+    const challengeId = url.searchParams.get("challengeId");
+    const investorId = url.searchParams.get("investorId");
+    const type = url.searchParams.get("type");
+    const status = url.searchParams.get("status");
+    const startDate = url.searchParams.get("startDate");
+    const endDate = url.searchParams.get("endDate");
+    const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
+    if ((challengeId && !idPattern.test(challengeId)) || (investorId && !idPattern.test(investorId))) {
+      return responseError(400, "Invalid transaction filter.");
+    }
+    if (type && !["UNITS", "STOCK_MARKET"].includes(type)) {
+      return responseError(400, "Invalid transaction type filter.");
+    }
+    if (status && !["pending", "verified", "rejected"].includes(status)) {
+      return responseError(400, "Invalid transaction status filter.");
+    }
+    const dateSchema = z.iso.date();
+    if ((startDate && !dateSchema.safeParse(startDate).success) || (endDate && !dateSchema.safeParse(endDate).success)) {
+      return responseError(400, "Invalid transaction date filter.");
+    }
+    if (startDate && endDate && startDate > endDate) {
+      return responseError(400, "The start date must not be after the end date.");
+    }
+
     const docs = await adminDb().collection("transactions").orderBy("createdAt", "desc").limit(10000).get();
+    const rows = docs.docs
+      .map((doc) => doc.data())
+      .filter((row) =>
+        (!challengeId || row.challengeId === challengeId) &&
+        (!investorId || row.investorId === investorId) &&
+        (!type || row.type === type) &&
+        (!status || row.status === status) &&
+        (!startDate || (typeof row.date === "string" && row.date >= startDate)) &&
+        (!endDate || (typeof row.date === "string" && row.date <= endDate)),
+      );
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Transactions");
     sheet.columns = [
@@ -37,7 +72,7 @@ export async function GET(request: Request): Promise<Response> {
       { header: "Institution", key: "institution", width: 24 },
       { header: "Reference", key: "reference", width: 20 },
     ];
-    for (const doc of docs.docs) sheet.addRow(doc.data());
+    for (const row of rows) sheet.addRow(row);
     sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
     sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
     const bytes = await workbook.xlsx.writeBuffer();

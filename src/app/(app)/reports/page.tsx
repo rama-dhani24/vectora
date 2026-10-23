@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ReportsView } from "@/features/reports/reports-view";
 import { requireRole } from "@/lib/auth/dal";
 import { adminDb } from "@/lib/firebase/admin";
+import { serializeFirestoreData } from "@/lib/firebase/serialize";
 import type { Challenge, Transaction } from "@/types";
 
 export const metadata: Metadata = { title: "Reports" };
@@ -22,15 +23,17 @@ export default async function ReportsPage({
   ]);
   const challenges: Challenge[] = challengeDocs.docs.map((doc) => ({
     id: doc.id,
-    ...(doc.data() as Omit<Challenge, "id">),
+    ...(serializeFirestoreData(doc.data()) as Omit<Challenge, "id">),
   }));
   const selectedChallengeId =
     (params.challengeId && challenges.some((item) => item.id === params.challengeId)
       ? params.challengeId
-      : challenges.find((item) => item.status === "open")?.id) ?? challenges[0]?.id ?? "";
+      : challenges.find((item) => item.status === "open")?.id) ??
+    challenges[0]?.id ??
+    "";
   const allTransactions: Transaction[] = transactionDocs.docs.map((doc) => ({
     id: doc.id,
-    ...(doc.data() as Omit<Transaction, "id">),
+    ...(serializeFirestoreData(doc.data()) as Omit<Transaction, "id">),
   }));
   const t = await getTranslations();
   const pages = await getTranslations("pages");

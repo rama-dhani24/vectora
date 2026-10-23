@@ -35,12 +35,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="bg-background text-foreground min-h-full font-sans">
         <NextIntlClientProvider>
-          <ThemeProvider
-            attribute="class"
-            defaultTheme="system"
-            enableSystem
-            disableTransitionOnChange
-          >
+          <ThemeProvider attribute="class" defaultTheme="light" disableTransitionOnChange>
             <TooltipProvider>{children}</TooltipProvider>
             <Toaster richColors position="top-center" />
           </ThemeProvider>

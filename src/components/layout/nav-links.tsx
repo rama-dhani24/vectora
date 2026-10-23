@@ -43,14 +43,17 @@ export function NavLinks({ role, onNavigate }: { role: UserRole; onNavigate?: ()
             onClick={onNavigate}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+              "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200",
               "focus-visible:ring-ring/50 outline-none focus-visible:ring-3",
               active
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                ? "bg-primary text-primary-foreground shadow-primary/15 shadow-md"
+                : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground hover:translate-x-0.5",
             )}
           >
-            <Icon className="size-4" aria-hidden />
+            <Icon
+              className="size-[17px] opacity-85 transition-transform group-hover:scale-105"
+              aria-hidden
+            />
             {t(item.key)}
           </Link>
         );

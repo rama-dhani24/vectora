@@ -14,6 +14,7 @@ import {
   deleteInvestorAction,
   saveInvestorAction,
 } from "@/features/data/actions";
+import { excelCellText, parseInvestorRows } from "@/lib/import/parse-investor-rows";
 import type { Investor } from "@/types";
 
 function parseCsv(text: string): string[][] {
@@ -53,7 +54,9 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
   const [pending, startTransition] = useTransition();
   const visible = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    return investors.filter((item) => !query || `${item.name} ${item.phone ?? ""}`.toLowerCase().includes(query));
+    return investors.filter(
+      (item) => !query || `${item.name} ${item.phone ?? ""}`.toLowerCase().includes(query),
+    );
   }, [investors, search]);
 
   async function submitInvestor(formData: FormData) {
@@ -78,7 +81,11 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
       if (!worksheet) throw new Error(t("csvEmpty"));
       rows = [];
       worksheet.eachRow((row) => {
-        rows.push(Array.from({ length: row.cellCount }, (_, index) => row.getCell(index + 1).text.trim()));
+        rows.push(
+          Array.from({ length: Math.max(row.cellCount, worksheet.columnCount) }, (_, index) =>
+            excelCellText(row.getCell(index + 1)),
+          ),
+        );
       });
     } else if (file.name.toLowerCase().endsWith(".csv")) {
       rows = parseCsv(await file.text());
@@ -86,17 +93,15 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
       throw new Error(t("fileType"));
     }
     if (!rows.length) throw new Error(t("csvEmpty"));
-    const headings = rows[0].map((item) => item.toLowerCase().replace(/[_\s-]+/g, ""));
-    const nameIndex = headings.findIndex((item) => ["name", "investorname", "fullname"].includes(item));
-    if (nameIndex < 0) throw new Error(t("csvNameColumn"));
-    const phoneIndex = headings.findIndex((item) => item === "phone");
-    const notesIndex = headings.findIndex((item) => item === "notes");
-    const data = rows.slice(1).map((row) => ({
-      name: row[nameIndex] ?? "",
-      phone: phoneIndex >= 0 ? row[phoneIndex] ?? "" : "",
-      notes: notesIndex >= 0 ? row[notesIndex] ?? "" : "",
-      status: "active" as const,
-    }));
+    let data: ReturnType<typeof parseInvestorRows>;
+    try {
+      data = parseInvestorRows(rows);
+    } catch (error) {
+      if (error instanceof Error && error.message === "csvNameColumn") {
+        throw new Error(t("csvNameColumn"));
+      }
+      throw error;
+    }
     if (!data.length) throw new Error(t("csvNoRows"));
     const result = await bulkCreateInvestorsAction(data);
     if (result.ok) toast.success(`${data.length} ${t("created")}`);
@@ -116,7 +121,7 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
-        <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium hover:bg-muted">
+        <label className="hover:bg-muted inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium">
           <Upload className="size-4" aria-hidden />
           {t("importCsv")}
           <input
@@ -152,15 +157,31 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
       >
         <div className="space-y-1">
           <Label htmlFor="investor-name">{t("fullName")}</Label>
-          <Input id="investor-name" name="name" required maxLength={120} defaultValue={selected?.name ?? ""} />
+          <Input
+            id="investor-name"
+            name="name"
+            required
+            maxLength={120}
+            defaultValue={selected?.name ?? ""}
+          />
         </div>
         <div className="space-y-1">
           <Label htmlFor="investor-phone">{t("phone")}</Label>
-          <Input id="investor-phone" name="phone" maxLength={40} defaultValue={selected?.phone ?? ""} />
+          <Input
+            id="investor-phone"
+            name="phone"
+            maxLength={40}
+            defaultValue={selected?.phone ?? ""}
+          />
         </div>
         <div className="space-y-1">
           <Label htmlFor="investor-notes">{t("notes")}</Label>
-          <Input id="investor-notes" name="notes" maxLength={2000} defaultValue={selected?.notes ?? ""} />
+          <Input
+            id="investor-notes"
+            name="notes"
+            maxLength={2000}
+            defaultValue={selected?.notes ?? ""}
+          />
         </div>
         <div className="space-y-1">
           <Label htmlFor="investor-status">{t("status")}</Label>
@@ -168,16 +189,20 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
             id="investor-status"
             name="status"
             defaultValue={selected?.status ?? "active"}
-            className="border-input bg-background h-9 w-full rounded-lg border px-2 text-sm"
+            className="form-control"
           >
             <option value="active">{t("active")}</option>
             <option value="inactive">{t("inactive")}</option>
           </select>
         </div>
         <div className="flex items-end gap-2">
-          <Button disabled={pending} type="submit">{selected ? t("save") : t("create")}</Button>
+          <Button disabled={pending} type="submit">
+            {selected ? t("save") : t("create")}
+          </Button>
           {selected ? (
-            <Button type="button" variant="outline" onClick={() => setSelected(null)}>{t("cancel")}</Button>
+            <Button type="button" variant="outline" onClick={() => setSelected(null)}>
+              {t("cancel")}
+            </Button>
           ) : null}
         </div>
       </form>
@@ -185,33 +210,54 @@ export function InvestorsManager({ investors }: { investors: Investor[] }) {
       <div className="overflow-x-auto rounded-xl border">
         <table className="w-full text-left text-sm">
           <thead className="bg-muted/50 text-muted-foreground">
-            <tr><th className="px-4 py-3">{t("investor")}</th><th className="px-4 py-3">{t("phone")}</th><th className="px-4 py-3">{t("status")}</th><th className="px-4 py-3 text-right">{t("actions")}</th></tr>
+            <tr>
+              <th className="px-4 py-3">{t("investor")}</th>
+              <th className="px-4 py-3">{t("phone")}</th>
+              <th className="px-4 py-3">{t("status")}</th>
+              <th className="px-4 py-3 text-right">{t("actions")}</th>
+            </tr>
           </thead>
           <tbody>
             {visible.map((investor) => (
               <tr key={investor.id} className="border-t">
                 <td className="px-4 py-3 font-medium">{investor.name}</td>
                 <td className="px-4 py-3">{investor.phone || "—"}</td>
-                <td className="px-4 py-3"><Badge variant={investor.status === "active" ? "secondary" : "outline"}>{investor.status === "active" ? t("active") : t("inactive")}</Badge></td>
+                <td className="px-4 py-3">
+                  <Badge variant={investor.status === "active" ? "secondary" : "outline"}>
+                    {investor.status === "active" ? t("active") : t("inactive")}
+                  </Badge>
+                </td>
                 <td className="space-x-2 px-4 py-3 text-right">
-                  <Button size="sm" variant="outline" onClick={() => setSelected(investor)}>{t("edit")}</Button>
+                  <Button size="sm" variant="outline" onClick={() => setSelected(investor)}>
+                    {t("edit")}
+                  </Button>
                   {investor.status === "inactive" ? (
                     <Button
                       size="sm"
                       variant="destructive"
                       disabled={pending}
-                      onClick={() => startTransition(async () => {
-                        if (!window.confirm(t("confirmDelete"))) return;
-                        const result = await deleteInvestorAction(investor.id);
-                        if (result.ok) toast.success(t("deleted"));
-                        else toast.error(result.error);
-                      })}
-                    >{t("delete")}</Button>
+                      onClick={() =>
+                        startTransition(async () => {
+                          if (!window.confirm(t("confirmDelete"))) return;
+                          const result = await deleteInvestorAction(investor.id);
+                          if (result.ok) toast.success(t("deleted"));
+                          else toast.error(result.error);
+                        })
+                      }
+                    >
+                      {t("delete")}
+                    </Button>
                   ) : null}
                 </td>
               </tr>
             ))}
-            {!visible.length ? <tr><td className="text-muted-foreground px-4 py-8 text-center" colSpan={4}>{t("empty")}</td></tr> : null}
+            {!visible.length ? (
+              <tr>
+                <td className="text-muted-foreground px-4 py-8 text-center" colSpan={4}>
+                  {t("empty")}
+                </td>
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>

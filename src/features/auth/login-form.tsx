@@ -79,13 +79,13 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
   const passwordError = errors.password?.message as AuthMessageKey | undefined;
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="border-border/70 shadow-foreground/[0.045] rounded-2xl shadow-xl">
+      <CardHeader className="gap-2 px-6 pt-6 sm:px-7 sm:pt-7">
         <CardTitle className="text-xl">{t("signInTitle")}</CardTitle>
         <CardDescription>{t("signInSubtitle")}</CardDescription>
       </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+      <CardContent className="px-6 pb-6 sm:px-7 sm:pb-7">
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5" noValidate>
           <div className="flex flex-col gap-2">
             <Label htmlFor="email">{t("email")}</Label>
             <Input
@@ -94,6 +94,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
               autoComplete="email"
               inputMode="email"
               autoFocus
+              className="bg-background/70 h-11"
               aria-invalid={emailError ? true : undefined}
               aria-describedby={emailError ? "email-error" : undefined}
               {...register("email")}
@@ -110,6 +111,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
               id="password"
               type="password"
               autoComplete="current-password"
+              className="bg-background/70 h-11"
               aria-invalid={passwordError ? true : undefined}
               aria-describedby={passwordError ? "password-error" : undefined}
               {...register("password")}
@@ -125,7 +127,12 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
               {t(formError)}
             </p>
           ) : null}
-          <Button type="submit" size="lg" disabled={isSubmitting}>
+          <Button
+            type="submit"
+            size="lg"
+            disabled={isSubmitting}
+            className="shadow-primary/15 mt-1 h-11 shadow-md"
+          >
             {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : null}
             {isSubmitting ? t("signingIn") : t("signIn")}
           </Button>

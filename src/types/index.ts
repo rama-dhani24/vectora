@@ -58,6 +58,12 @@ export interface Challenge {
   updatedAt: string;
 }
 
+/** Fields needed to render the challenge list in the client UI. */
+export type ChallengeSummary = Pick<
+  Challenge,
+  "id" | "title" | "month" | "year" | "startDate" | "endDate" | "status"
+>;
+
 export const INVESTMENT_TYPES = ["UNITS", "STOCK_MARKET"] as const;
 export type InvestmentType = (typeof INVESTMENT_TYPES)[number];
 

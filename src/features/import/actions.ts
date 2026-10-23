@@ -42,7 +42,8 @@ export async function importSheetAction(input: unknown): Promise<ImportResult> {
     if (!reconciliation.matches) {
       return {
         ok: false,
-        error: "The imported totals do not match the sheet totals. Correct the data before importing.",
+        error:
+          "The imported totals do not match the sheet totals. Correct the data before importing.",
         reconciliation,
       };
     }
@@ -58,33 +59,48 @@ export async function importSheetAction(input: unknown): Promise<ImportResult> {
 
     const existing = await db.collection("investors").get();
     const byName = new Map(existing.docs.map((doc) => [String(doc.get("nameLower") ?? ""), doc]));
-    const seen = new Set<string>();
-    const seenInvestorIds = new Set<string>();
     const rows = data.rows.map((row) => {
       const nameLower = row.name.toLocaleLowerCase("en");
-      if (seen.has(nameLower)) throw new Error(`Duplicate investor name in sheet: ${row.name}`);
-      seen.add(nameLower);
-      const matchedById = row.investorId ? existing.docs.find((doc) => doc.id === row.investorId) : undefined;
+      const matchedById = row.investorId
+        ? existing.docs.find((doc) => doc.id === row.investorId)
+        : undefined;
       if (row.investorId && !matchedById) {
-        throw new Error(`The selected investor for ${row.name} no longer exists. Refresh the import preview.`);
+        throw new Error(
+          `The selected investor for ${row.name} no longer exists. Refresh the import preview.`,
+        );
       }
       const matched = matchedById ?? byName.get(nameLower);
       if (matched?.get("status") === "inactive") {
         throw new Error(`${row.name} is inactive. Select an active investor or create a new one.`);
       }
       const investorId = matched?.id ?? row.investorId ?? "";
-      if (investorId && seenInvestorIds.has(investorId)) {
-        throw new Error(`Multiple sheet rows map to the same investor: ${row.name}`);
-      }
-      if (investorId) seenInvestorIds.add(investorId);
       return { ...row, nameLower, investorId };
     });
+
+    // Repeated contributions for the same investor become one row per investor
+    // (and therefore one transaction per investment type). Keep reconciliation
+    // above based on every original contribution row.
+    const groupedRows = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      const key = row.investorId ? `investor:${row.investorId}` : `name:${row.nameLower}`;
+      const existingRow = groupedRows.get(key);
+      if (!existingRow) {
+        groupedRows.set(key, { ...row });
+        continue;
+      }
+      const units = existingRow.units + row.units;
+      const stock = existingRow.stock + row.stock;
+      if (!Number.isSafeInteger(units) || !Number.isSafeInteger(stock)) {
+        throw new Error(`Combined contributions for ${row.name} exceed the safe amount limit.`);
+      }
+      groupedRows.set(key, { ...existingRow, units, stock });
+    }
 
     const now = new Date().toISOString();
     const batch = db.batch();
     const auditCollection = db.collection("auditLogs");
     let pendingWrites = 0;
-    for (const row of rows) {
+    for (const row of groupedRows.values()) {
       let investorId = row.investorId;
       let investorName = row.name;
       if (!investorId) {
@@ -156,9 +172,11 @@ export async function importSheetAction(input: unknown): Promise<ImportResult> {
       }
     }
 
-    if (pendingWrites > 500) throw new Error("The sheet is too large to import in one atomic batch.");
+    if (pendingWrites > 500)
+      throw new Error("The sheet is too large to import in one atomic batch.");
     await batch.commit();
-    for (const path of ["/dashboard", "/transactions", "/reports", "/investors"]) revalidatePath(path);
+    for (const path of ["/dashboard", "/transactions", "/reports", "/investors"])
+      revalidatePath(path);
     return { ok: true, reconciliation };
   } catch (error) {
     if (error instanceof AuthorizationError) return { ok: false, error: error.message };
@@ -166,6 +184,9 @@ export async function importSheetAction(input: unknown): Promise<ImportResult> {
       return { ok: false, error: error.issues[0]?.message ?? "Invalid import data." };
     }
     console.error("[import] action failed", error);
-    return { ok: false, error: error instanceof Error ? error.message : "Could not import this sheet." };
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not import this sheet.",
+    };
   }
 }

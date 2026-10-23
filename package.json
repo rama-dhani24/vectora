@@ -2,12 +2,15 @@
   "name": "vectora",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
@@ -15,7 +18,8 @@
     "emulators": "firebase emulators:start --project demo-vectora --export-on-exit=./.emulator-data",
     "seed:admin": "tsx --env-file-if-exists=.env.local scripts/seed-super-admin.ts",
     "seed:sample": "tsx --env-file-if-exists=.env.local scripts/seed-sample.ts",
-    "emulators:resume": "firebase emulators:start --project demo-vectora --import=./.emulator-data --export-on-exit=./.emulator-data"
+    "emulators:resume": "firebase emulators:start --project demo-vectora --import=./.emulator-data --export-on-exit=./.emulator-data",
+    "build:functions": "npm --prefix functions run build"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

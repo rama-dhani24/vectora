@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ImportManager } from "@/features/import/import-manager";
 import { requireRole } from "@/lib/auth/dal";
 import { adminDb } from "@/lib/firebase/admin";
+import { serializeFirestoreData } from "@/lib/firebase/serialize";
 import type { Challenge, Investor } from "@/types";
 
 export const metadata: Metadata = { title: "Import" };
@@ -18,11 +19,11 @@ export default async function Page() {
   ]);
   const challenges: Challenge[] = challengeDocs.docs.map((doc) => ({
     id: doc.id,
-    ...(doc.data() as Omit<Challenge, "id">),
+    ...(serializeFirestoreData(doc.data()) as Omit<Challenge, "id">),
   }));
   const investors: Investor[] = investorDocs.docs.map((doc) => ({
     id: doc.id,
-    ...(doc.data() as Omit<Investor, "id">),
+    ...(serializeFirestoreData(doc.data()) as Omit<Investor, "id">),
   }));
   return (
     <>

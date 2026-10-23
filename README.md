@@ -11,12 +11,12 @@ producing the challenge summary report with column totals and a FINAL TOTAL.
 - Tailwind CSS 4, shadcn/ui (Base UI), TanStack Table, lucide-react, next-themes, sonner
 - ExcelJS for workbook import/export and @react-pdf/renderer for PDF reports
 - react-hook-form + zod 4 (shared schemas for forms and server code)
-- next-intl (English / Kiswahili, chosen via cookie)
+- next-intl (English only)
 - Vitest, ESLint 9 (flat config) + Prettier
 
 ## Prerequisites
 
-- Node.js 22 or newer (`node -v`)
+- Node.js 22 or newer (`node -v`; also required for the seed scripts)
 - Java 21 or newer (required by the Firestore/Storage emulators: `java -version`)
 - Firebase CLI: `npm install -g firebase-tools`
 
@@ -26,7 +26,7 @@ producing the challenge summary report with column totals and a FINAL TOTAL.
 npm install
 npm --prefix functions install
 cp .env.example .env.local        # emulator defaults, no real credentials needed
-npm --prefix functions run build   # compiles Cloud Functions for the emulator
+npm run build:functions            # compiles Cloud Functions for the emulator
 
 # Terminal 1: Firebase emulators (Auth 9099, Firestore 8080, Storage 9199, Functions 5001, UI 4000)
 npm run emulators
@@ -78,19 +78,19 @@ Roles: `super_admin` (everything, manages users), `admin` (manages data), `viewe
 
 ## Scripts
 
-| Command                                                 | Description                                   |
-| ------------------------------------------------------- | --------------------------------------------- |
-| `npm run dev`                                           | Next.js dev server                            |
-| `npm run build` / `npm start`                           | Production build / serve                      |
-| `npm run lint`                                          | ESLint                                        |
-| `npm run typecheck`                                     | TypeScript (`tsc --noEmit`)                   |
-| `npm test`                                              | Vitest unit tests                             |
-| `npm run format`                                        | Prettier                                      |
-| `npm run emulators`                                     | Firebase Emulator Suite (saves data on exit)  |
-| `npm run emulators:resume`                              | Emulators, reloading the data saved last time |
-| `npm run seed:admin -- --email … --password … --name …` | Create or promote a Super Admin               |
-| `npm run seed:sample`                                    | Load the August 2026 demo challenge (emulator only) |
-| `npm --prefix functions run build`                       | Compile Cloud Functions                       |
+| Command                                                 | Description                                         |
+| ------------------------------------------------------- | --------------------------------------------------- |
+| `npm run dev`                                           | Next.js dev server                                  |
+| `npm run build` / `npm start`                           | Production build / serve                            |
+| `npm run lint`                                          | ESLint                                              |
+| `npm run typecheck`                                     | TypeScript (`tsc --noEmit`)                         |
+| `npm test`                                              | Vitest unit tests                                   |
+| `npm run format`                                        | Prettier                                            |
+| `npm run emulators`                                     | Firebase Emulator Suite (saves data on exit)        |
+| `npm run emulators:resume`                              | Emulators, reloading the data saved last time       |
+| `npm run seed:admin -- --email … --password … --name …` | Create or promote a Super Admin                     |
+| `npm run seed:sample`                                   | Load the August 2026 demo challenge (emulator only) |
+| `npm run build:functions`                               | Compile Cloud Functions                             |
 
 ## Project structure
 
@@ -98,14 +98,14 @@ Roles: `super_admin` (everything, manages users), `admin` (manages data), `viewe
 src/
   app/                 routes: /login, (app)/dashboard, challenges, transactions, investors,
                        reports, import, settings; api/auth/session
-  components/          ui/ (shadcn), layout/ (shell, nav, theme & language switchers), providers/
+  components/          ui/ (shadcn), layout/ (shell and navigation), providers/
   features/            auth/, users/ (+ investors, challenges, transactions, reports, import)
   i18n/                next-intl request config and locale action
   lib/                 firebase/ (client + admin), auth/ (DAL, roles), validators/, money.ts, audit.ts
   types/               shared domain types
   proxy.ts             route protection
 functions/             Cloud Functions (aggregates arrive in Milestone 6)
-messages/              en.json, sw.json
+messages/              en.json
 scripts/               seed scripts
 firestore.rules, storage.rules, firestore.indexes.json, firebase.json
 ```
