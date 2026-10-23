@@ -8,7 +8,8 @@ producing the challenge summary report with column totals and a FINAL TOTAL.
 
 - Next.js 16 (App Router, Turbopack), React 19, TypeScript strict
 - Firebase: Auth, Firestore, Cloud Storage, Cloud Functions (v2, Node 22), Emulator Suite
-- Tailwind CSS 4, shadcn/ui (Base UI), lucide-react, next-themes, sonner
+- Tailwind CSS 4, shadcn/ui (Base UI), TanStack Table, lucide-react, next-themes, sonner
+- ExcelJS for workbook import/export and @react-pdf/renderer for PDF reports
 - react-hook-form + zod 4 (shared schemas for forms and server code)
 - next-intl (English / Kiswahili, chosen via cookie)
 - Vitest, ESLint 9 (flat config) + Prettier
@@ -36,6 +37,12 @@ npm run seed:admin -- --email you@example.com --password 'ChangeMe123!' --name "
 # Terminal 2: run the app
 npm run dev
 ```
+
+To load the deterministic August 2026 sample challenge (46 investors and verified transactions),
+run `npm run seed:sample` after starting the emulators. It reproduces the brief's totals exactly:
+TZS 106,077,627 Units, TZS 31,397,777 Stock Market, and TZS 137,475,404 final. The brief supplies
+only three investor names and aggregate totals, so the remaining sample names are clearly marked
+`Sample Investor 04` through `Sample Investor 46`.
 
 Open http://localhost:3000 and sign in with the Super Admin you seeded. Add further admins or
 viewers from **Settings → Users and roles**. The Emulator UI is at http://127.0.0.1:4000.
@@ -82,6 +89,8 @@ Roles: `super_admin` (everything, manages users), `admin` (manages data), `viewe
 | `npm run emulators`                                     | Firebase Emulator Suite (saves data on exit)  |
 | `npm run emulators:resume`                              | Emulators, reloading the data saved last time |
 | `npm run seed:admin -- --email … --password … --name …` | Create or promote a Super Admin               |
+| `npm run seed:sample`                                    | Load the August 2026 demo challenge (emulator only) |
+| `npm --prefix functions run build`                       | Compile Cloud Functions                       |
 
 ## Project structure
 
@@ -114,7 +123,43 @@ firestore.rules, storage.rules, firestore.indexes.json, firebase.json
 
 All money is stored as whole TZS integers. `src/lib/money.ts` rejects decimals rather than rounding.
 
+## Application workflows
+
+- Investors support create, edit, search, inactive status, guarded deletion, duplicate-name
+  warnings, and Excel/CSV bulk import.
+- Challenges support draft/open/closed states. Only one challenge may be open; closed challenges
+  reject transaction changes. Reopening a closed challenge is restricted to Super Admin and audited.
+- Transactions support fast entry, searchable investor selection, inline investor creation,
+  optional image proof, duplicate warnings, pending/verified/rejected status, filters, and audited
+  create/update/delete/status changes. Proofs are compressed to JPEG before upload.
+- Challenge reports contain the requested investor/type totals, verified-only by default, totals,
+  statements with proof previews, comparisons, and Excel/PDF downloads. Transactions can also be
+  exported to Excel.
+- Excel/CSV migration previews investor mappings and checks Units, Stock Market, and FINAL TOTAL
+  against the source sheet. The server repeats reconciliation before its atomic import batch;
+  mismatched data is never written. Imported rows become verified transactions dated on the
+  challenge end date.
+- Firestore `onDocumentWritten` triggers update challenge and investor aggregates. A transaction
+  marker keyed by the event ID makes retries idempotent; amounts and participant counts are
+  updated together in a Firestore transaction.
+
+Browser Firestore writes are intentionally denied. Authenticated server actions verify the Firebase
+session and custom role, validate inputs using the shared Zod schemas, enforce open-challenge rules,
+and create audit entries. This prevents clients from bypassing verification and audit history.
+Firestore rules restrict reads by role; Storage rules restrict proof writes to role-authorized
+images smaller than 5 MB.
+
 ## Deployment
 
-A full deployment guide (Firebase App Hosting or Vercel, rules/indexes/functions deploy) is part of
-Milestone 9.
+1. Create a Firebase project with Authentication (Email/Password), Firestore, and Storage enabled.
+2. Set the `NEXT_PUBLIC_FIREBASE_*` variables from the Firebase Web App configuration and provide
+   server credentials using Application Default Credentials or `FIREBASE_CLIENT_EMAIL` and
+   `FIREBASE_PRIVATE_KEY`. Keep `.env.local` out of source control.
+3. Deploy Firebase backend resources: `firebase deploy --only firestore:rules,firestore:indexes,storage,functions`.
+4. Deploy the Next.js app to Vercel or Firebase App Hosting and configure the same environment
+   variables. Set `NEXT_PUBLIC_USE_FIREBASE_EMULATOR=false` (or remove it) in production.
+5. Bootstrap the first Super Admin in the production project with
+   `npm run seed:admin -- --email … --password … --name …` from a trusted, credentialed environment.
+
+Before deployment, run `npm run lint`, `npm run typecheck`, `npm test`,
+`npm --prefix functions run build`, and `npm run build`.

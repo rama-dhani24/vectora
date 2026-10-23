@@ -26,8 +26,9 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Module collections. Field-level validation (amount > 0, types, closed-challenge locks)
-    // is completed in Milestones 3-5 and 9 together with the write paths that use them.
+    // Application writes go through authenticated server actions. Those actions validate with
+    // the shared Zod schemas and write audit entries before returning. Denying browser writes
+    // prevents clients from bypassing challenge locks, verification, and audit history.
     match /investors/{investorId} {
       allow read: if isAdmin();
       allow write: if false;
