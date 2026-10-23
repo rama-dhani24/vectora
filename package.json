@@ -12,8 +12,9 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "emulators": "firebase emulators:start --project demo-vectora --import=./.emulator-data --export-on-exit=./.emulator-data",
-    "seed:admin": "tsx --env-file-if-exists=.env.local scripts/seed-super-admin.ts"
+    "emulators": "firebase emulators:start --project demo-vectora --export-on-exit=./.emulator-data",
+    "seed:admin": "tsx --env-file-if-exists=.env.local scripts/seed-super-admin.ts",
+    "emulators:resume": "firebase emulators:start --project demo-vectora --import=./.emulator-data --export-on-exit=./.emulator-data"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

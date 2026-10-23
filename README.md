@@ -40,7 +40,8 @@ npm run dev
 Open http://localhost:3000 and sign in with the Super Admin you seeded. Add further admins or
 viewers from **Settings → Users and roles**. The Emulator UI is at http://127.0.0.1:4000.
 
-`npm run emulators` persists emulator data to `.emulator-data/` on exit and reloads it on start.
+`npm run emulators` saves emulator data to `.emulator-data/` when you stop it (Ctrl+C). Use
+`npm run emulators:resume` afterwards to start again with that saved data.
 
 ## Environment variables
 
