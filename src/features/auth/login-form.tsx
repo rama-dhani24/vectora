@@ -4,7 +4,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { FirebaseError } from "firebase/app";
 import { signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -42,7 +41,6 @@ function firebaseErrorKey(err: unknown): AuthMessageKey {
 
 export function LoginForm({ nextPath }: { nextPath: string }) {
   const t = useTranslations("auth");
-  const router = useRouter();
   const [formError, setFormError] = useState<AuthMessageKey | null>(null);
   const {
     register,
@@ -71,8 +69,7 @@ export function LoginForm({ nextPath }: { nextPath: string }) {
         );
         return;
       }
-      router.replace(nextPath);
-      router.refresh();
+      window.location.assign(nextPath);
     } catch (err) {
       setFormError(firebaseErrorKey(err));
     }
