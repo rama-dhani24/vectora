@@ -4,9 +4,10 @@ import { Document, renderToBuffer } from "@react-pdf/renderer";
 import { z } from "zod";
 import { assertRole } from "@/lib/auth/dal";
 import { aggregateTransactions } from "@/lib/domain/aggregation";
-import { adminDb } from "@/lib/firebase/admin";
 import { ChallengePdfPage } from "@/features/reports/challenge-pdf";
-import type { Challenge, Transaction } from "@/types";
+import type { Challenge, SessionUser, Transaction } from "@/types";
+import { createClient } from "@/lib/supabase/server";
+import { mapChallenge, mapTransaction, withSignedProofUrls } from "@/lib/supabase/mappers";
 
 export const runtime = "nodejs";
 
@@ -15,13 +16,15 @@ function responseError(status: number, message: string): Response {
 }
 
 export async function GET(request: Request): Promise<Response> {
+  let actor: SessionUser;
   try {
-    await assertRole("viewer");
+    actor = await assertRole("viewer");
   } catch {
     return responseError(401, "Authentication required.");
   }
 
   const url = new URL(request.url);
+  const supabase = await createClient();
   const format = url.searchParams.get("format");
   if (url.searchParams.get("scope") === "transactions") {
     if (format !== "xlsx") return responseError(400, "Unsupported transaction export format.");
@@ -31,8 +34,11 @@ export async function GET(request: Request): Promise<Response> {
     const status = url.searchParams.get("status");
     const startDate = url.searchParams.get("startDate");
     const endDate = url.searchParams.get("endDate");
-    const idPattern = /^[A-Za-z0-9_-]{1,128}$/;
-    if ((challengeId && !idPattern.test(challengeId)) || (investorId && !idPattern.test(investorId))) {
+    const idPattern = /^[0-9a-f-]{36}$/i;
+    if (
+      (challengeId && !idPattern.test(challengeId)) ||
+      (investorId && !idPattern.test(investorId))
+    ) {
       return responseError(400, "Invalid transaction filter.");
     }
     if (type && !["UNITS", "STOCK_MARKET"].includes(type)) {
@@ -42,24 +48,31 @@ export async function GET(request: Request): Promise<Response> {
       return responseError(400, "Invalid transaction status filter.");
     }
     const dateSchema = z.iso.date();
-    if ((startDate && !dateSchema.safeParse(startDate).success) || (endDate && !dateSchema.safeParse(endDate).success)) {
+    if (
+      (startDate && !dateSchema.safeParse(startDate).success) ||
+      (endDate && !dateSchema.safeParse(endDate).success)
+    ) {
       return responseError(400, "Invalid transaction date filter.");
     }
     if (startDate && endDate && startDate > endDate) {
       return responseError(400, "The start date must not be after the end date.");
     }
 
-    const docs = await adminDb().collection("transactions").orderBy("createdAt", "desc").limit(10000).get();
-    const rows = docs.docs
-      .map((doc) => doc.data())
-      .filter((row) =>
-        (!challengeId || row.challengeId === challengeId) &&
-        (!investorId || row.investorId === investorId) &&
-        (!type || row.type === type) &&
-        (!status || row.status === status) &&
-        (!startDate || (typeof row.date === "string" && row.date >= startDate)) &&
-        (!endDate || (typeof row.date === "string" && row.date <= endDate)),
-      );
+    let query = supabase
+      .from("transactions")
+      .select("*")
+      .eq("group_id", actor.groupId)
+      .order("created_at", { ascending: false })
+      .limit(10000);
+    if (challengeId) query = query.eq("challenge_id", challengeId);
+    if (investorId) query = query.eq("investor_id", investorId);
+    if (type) query = query.eq("type", type);
+    if (status) query = query.eq("status", status);
+    if (startDate) query = query.gte("date", startDate);
+    if (endDate) query = query.lte("date", endDate);
+    const { data: transactionRows, error: queryError } = await query;
+    if (queryError) return responseError(500, "Could not load transactions.");
+    const rows = (transactionRows ?? []).map(mapTransaction);
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet("Transactions");
     sheet.columns = [
@@ -72,7 +85,7 @@ export async function GET(request: Request): Promise<Response> {
       { header: "Institution", key: "institution", width: 24 },
       { header: "Reference", key: "reference", width: 20 },
     ];
-    for (const row of rows) sheet.addRow(row);
+    for (const row of rows) sheet.addRow({ ...row, challengeId: row.challengeId });
     sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
     sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
     const bytes = await workbook.xlsx.writeBuffer();
@@ -87,29 +100,43 @@ export async function GET(request: Request): Promise<Response> {
   if (format !== "xlsx" && format !== "pdf") {
     return responseError(400, "Use format=xlsx or format=pdf.");
   }
-  const db = adminDb();
   const challengeId = url.searchParams.get("challengeId");
   const includePending = url.searchParams.get("includePending") === "true";
-  if (challengeId && !/^[A-Za-z0-9_-]{1,128}$/.test(challengeId)) {
+  if (challengeId && !/^[0-9a-f-]{36}$/i.test(challengeId)) {
     return responseError(400, "Invalid challenge id.");
   }
-  let challengeSnap = challengeId ? await db.collection("challenges").doc(challengeId).get() : null;
-  if (challengeId && !challengeSnap?.exists) return responseError(404, "Challenge not found.");
-  if (!challengeSnap?.exists) {
-    const open = await db.collection("challenges").where("status", "==", "open").limit(1).get();
-    challengeSnap = open.docs[0] ?? null;
+  const challengeQuery = supabase.from("challenges").select("*").eq("group_id", actor.groupId);
+  let challengeRow: Parameters<typeof mapChallenge>[0] | null = null;
+  if (challengeId) {
+    const { data } = await challengeQuery.eq("id", challengeId).maybeSingle();
+    challengeRow = data;
+    if (!challengeRow) return responseError(404, "Challenge not found.");
+  } else {
+    const open = await challengeQuery.eq("status", "open").limit(1).maybeSingle();
+    challengeRow = open.data;
+    if (!challengeRow) {
+      const recent = await supabase
+        .from("challenges")
+        .select("*")
+        .eq("group_id", actor.groupId)
+        .order("start_date", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      challengeRow = recent.data;
+    }
   }
-  if (!challengeSnap?.exists) {
-    const recent = await db.collection("challenges").orderBy("startDate", "desc").limit(1).get();
-    challengeSnap = recent.docs[0] ?? null;
-  }
-  if (!challengeSnap?.exists) return responseError(404, "No challenge is available for export.");
-  const challenge: Challenge = { id: challengeSnap.id, ...(challengeSnap.data() as Omit<Challenge, "id">) };
-  const transactions = await db.collection("transactions").where("challengeId", "==", challenge.id).limit(20000).get();
-  const list: Transaction[] = transactions.docs.map((doc) => ({
-    id: doc.id,
-    ...(doc.data() as Omit<Transaction, "id">),
-  }));
+  if (!challengeRow) return responseError(404, "No challenge is available for export.");
+  const challenge: Challenge = mapChallenge(challengeRow);
+  const transactionResult = await supabase
+    .from("transactions")
+    .select("*")
+    .eq("group_id", actor.groupId)
+    .eq("challenge_id", challenge.id)
+    .limit(20000);
+  const list: Transaction[] = await withSignedProofUrls(
+    supabase,
+    (transactionResult.data ?? []).map(mapTransaction),
+  );
   const { investors, totals } = aggregateTransactions(list, includePending);
 
   if (format === "pdf") {
@@ -141,15 +168,15 @@ export async function GET(request: Request): Promise<Response> {
   sheet.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1E3A5F" } };
   sheet.addRow(["No", "INVESTOR NAME", "UNITS", "STOCK MARKET", "TOTAL PER INVESTOR"]);
   sheet.getRow(2).font = { bold: true };
-  sheet.columns = [
-    { width: 8 },
-    { width: 30 },
-    { width: 18 },
-    { width: 18 },
-    { width: 22 },
-  ];
+  sheet.columns = [{ width: 8 }, { width: 30 }, { width: 18 }, { width: 18 }, { width: 22 }];
   investors.forEach((investor, index) =>
-    sheet.addRow([index + 1, investor.investorName, investor.units, investor.stock, investor.total]),
+    sheet.addRow([
+      index + 1,
+      investor.investorName,
+      investor.units,
+      investor.stock,
+      investor.total,
+    ]),
   );
   sheet.addRow(["", "TOTAL", totals.units, totals.stock, totals.final]);
   sheet.addRow(["", "FINAL TOTAL", "", "", totals.final]);

@@ -1,20 +1,18 @@
 "use server";
 
-import { FieldValue } from "firebase-admin/firestore";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { AuthorizationError, assertRole } from "@/lib/auth/dal";
-import { adminDb } from "@/lib/firebase/admin";
 import { reconcileTotals } from "@/lib/domain/aggregation";
-import type { Challenge } from "@/types";
+import { createClient } from "@/lib/supabase/server";
 
 const importSchema = z.object({
-  challengeId: z.string().min(1),
+  challengeId: z.string().uuid(),
   rows: z
     .array(
       z.object({
         name: z.string().trim().min(1).max(120),
-        investorId: z.string().max(128).optional(),
+        investorId: z.string().uuid().optional(),
         units: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
         stock: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
       }),
@@ -48,135 +46,17 @@ export async function importSheetAction(input: unknown): Promise<ImportResult> {
       };
     }
 
-    const db = adminDb();
-    const challengeRef = db.collection("challenges").doc(data.challengeId);
-    const challengeSnap = await challengeRef.get();
-    if (!challengeSnap.exists) return { ok: false, error: "Choose an existing challenge." };
-    const challenge = challengeSnap.data() as Partial<Challenge>;
-    if (challenge.status !== "open") {
-      return { ok: false, error: "Open the challenge before importing its transactions." };
-    }
-
-    const existing = await db.collection("investors").get();
-    const byName = new Map(existing.docs.map((doc) => [String(doc.get("nameLower") ?? ""), doc]));
-    const rows = data.rows.map((row) => {
-      const nameLower = row.name.toLocaleLowerCase("en");
-      const matchedById = row.investorId
-        ? existing.docs.find((doc) => doc.id === row.investorId)
-        : undefined;
-      if (row.investorId && !matchedById) {
-        throw new Error(
-          `The selected investor for ${row.name} no longer exists. Refresh the import preview.`,
-        );
-      }
-      const matched = matchedById ?? byName.get(nameLower);
-      if (matched?.get("status") === "inactive") {
-        throw new Error(`${row.name} is inactive. Select an active investor or create a new one.`);
-      }
-      const investorId = matched?.id ?? row.investorId ?? "";
-      return { ...row, nameLower, investorId };
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("import_challenge_sheet", {
+      p_group_id: actor.groupId,
+      p_challenge_id: data.challengeId,
+      p_rows: data.rows,
+      p_expected: data.expected,
     });
-
-    // Repeated contributions for the same investor become one row per investor
-    // (and therefore one transaction per investment type). Keep reconciliation
-    // above based on every original contribution row.
-    const groupedRows = new Map<string, (typeof rows)[number]>();
-    for (const row of rows) {
-      const key = row.investorId ? `investor:${row.investorId}` : `name:${row.nameLower}`;
-      const existingRow = groupedRows.get(key);
-      if (!existingRow) {
-        groupedRows.set(key, { ...row });
-        continue;
-      }
-      const units = existingRow.units + row.units;
-      const stock = existingRow.stock + row.stock;
-      if (!Number.isSafeInteger(units) || !Number.isSafeInteger(stock)) {
-        throw new Error(`Combined contributions for ${row.name} exceed the safe amount limit.`);
-      }
-      groupedRows.set(key, { ...existingRow, units, stock });
-    }
-
-    const now = new Date().toISOString();
-    const batch = db.batch();
-    const auditCollection = db.collection("auditLogs");
-    let pendingWrites = 0;
-    for (const row of groupedRows.values()) {
-      let investorId = row.investorId;
-      let investorName = row.name;
-      if (!investorId) {
-        const ref = db.collection("investors").doc();
-        investorId = ref.id;
-        const investor = {
-          name: row.name,
-          nameLower: row.nameLower,
-          status: "active",
-          phone: "",
-          notes: "",
-          createdAt: now,
-          updatedAt: now,
-        };
-        batch.create(ref, investor);
-        batch.create(auditCollection.doc(), {
-          entity: "investor",
-          entityId: investorId,
-          action: "import_create",
-          before: null,
-          after: investor,
-          userId: actor.uid,
-          timestamp: FieldValue.serverTimestamp(),
-        });
-        pendingWrites += 2;
-      } else {
-        const investorDoc = existing.docs.find((doc) => doc.id === investorId);
-        if (investorDoc) investorName = String(investorDoc.get("name"));
-      }
-
-      for (const investment of [
-        { type: "UNITS" as const, amount: row.units },
-        { type: "STOCK_MARKET" as const, amount: row.stock },
-      ]) {
-        if (investment.amount === 0) continue;
-        const transactionRef = db.collection("transactions").doc();
-        const transaction = {
-          challengeId: data.challengeId,
-          investorId,
-          investorName,
-          type: investment.type,
-          amount: investment.amount,
-          date: challenge.endDate ?? now.slice(0, 10),
-          institution: "",
-          reference: "",
-          proofUrl: "",
-          proofPath: "",
-          rawMessage: "",
-          notes: "Imported from the challenge summary sheet",
-          status: "verified",
-          source: "import",
-          createdBy: actor.uid,
-          createdAt: now,
-          updatedAt: now,
-          verifiedBy: actor.uid,
-          verifiedAt: now,
-        };
-        batch.create(transactionRef, transaction);
-        batch.create(auditCollection.doc(), {
-          entity: "transaction",
-          entityId: transactionRef.id,
-          action: "import",
-          before: null,
-          after: transaction,
-          userId: actor.uid,
-          timestamp: FieldValue.serverTimestamp(),
-        });
-        pendingWrites += 2;
-      }
-    }
-
-    if (pendingWrites > 500)
-      throw new Error("The sheet is too large to import in one atomic batch.");
-    await batch.commit();
-    for (const path of ["/dashboard", "/transactions", "/reports", "/investors"])
+    if (error) throw error;
+    for (const path of ["/dashboard", "/transactions", "/reports", "/investors"]) {
       revalidatePath(path);
+    }
     return { ok: true, reconciliation };
   } catch (error) {
     if (error instanceof AuthorizationError) return { ok: false, error: error.message };

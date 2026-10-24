@@ -1,7 +1,6 @@
 "use client";
 
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { Check, ClipboardPaste, Trash2, X } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
@@ -17,7 +16,7 @@ import {
   saveTransactionAction,
   setTransactionStatusAction,
 } from "@/features/data/actions";
-import { getClientServices } from "@/lib/firebase/client";
+import { createClient } from "@/lib/supabase/client";
 import { formatTzs } from "@/lib/money";
 import type { Challenge, Investor, Transaction } from "@/types";
 
@@ -55,28 +54,30 @@ function compressImage(file: File): Promise<File> {
   );
 }
 
-async function uploadProof(
-  file: File,
-  challengeId: string,
-): Promise<{ url: string; path: string }> {
+async function uploadProof(file: File, groupId: string, challengeId: string): Promise<string> {
   const image = await compressImage(file);
   if (image.size >= 5 * 1024 * 1024) {
     throw new Error("Proof images must be smaller than 5 MB after compression.");
   }
-  const path = `proofs/${challengeId}/${crypto.randomUUID()}.jpg`;
-  const storage = getClientServices().storage;
-  const uploaded = await uploadBytes(ref(storage, path), image, { contentType: "image/jpeg" });
-  return { url: await getDownloadURL(uploaded.ref), path };
+  const path = `${groupId}/${challengeId}/${crypto.randomUUID()}.jpg`;
+  const { error } = await createClient().storage.from("proofs").upload(path, image, {
+    contentType: "image/jpeg",
+    upsert: false,
+  });
+  if (error) throw new Error(error.message);
+  return path;
 }
 
 export function TransactionsManager({
   transactions,
   challenges,
   investors,
+  groupId,
 }: {
   transactions: Transaction[];
   challenges: Challenge[];
   investors: Investor[];
+  groupId: string;
 }) {
   const t = useTranslations("features.transactions");
   const router = useRouter();
@@ -113,8 +114,8 @@ export function TransactionsManager({
 
   async function submit(formData: FormData) {
     const challengeId = String(formData.get("challengeId") ?? "");
-    let uploaded = { url: "", path: "" };
-    if (proof) uploaded = await uploadProof(proof, challengeId);
+    let proofPath = editing?.proofPath ?? "";
+    if (proof) proofPath = await uploadProof(proof, groupId, challengeId);
     const result = await saveTransactionAction(editing?.id ?? null, {
       challengeId,
       investorId: formData.get("investorId"),
@@ -123,8 +124,8 @@ export function TransactionsManager({
       date: formData.get("date"),
       institution: formData.get("institution"),
       reference: formData.get("reference"),
-      proofUrl: uploaded.url || editing?.proofUrl || "",
-      proofPath: uploaded.path || editing?.proofPath || "",
+      proofUrl: "",
+      proofPath,
       rawMessage: formData.get("rawMessage"),
       notes: formData.get("notes"),
       source: "manual",

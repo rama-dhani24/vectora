@@ -3,7 +3,7 @@ import { USER_ROLES, type UserRole } from "@/types";
 const RANK: Record<UserRole, number> = {
   viewer: 1,
   admin: 2,
-  super_admin: 3,
+  owner: 3,
 };
 
 export function isUserRole(value: unknown): value is UserRole {
@@ -17,8 +17,8 @@ export function hasRole(role: UserRole | null | undefined, required: UserRole): 
 }
 
 export const can = {
-  manageUsers: (role: UserRole | null | undefined) => hasRole(role, "super_admin"),
-  reopenChallenge: (role: UserRole | null | undefined) => hasRole(role, "super_admin"),
+  manageUsers: (role: UserRole | null | undefined) => hasRole(role, "owner"),
+  reopenChallenge: (role: UserRole | null | undefined) => hasRole(role, "owner"),
   writeData: (role: UserRole | null | undefined) => hasRole(role, "admin"),
   readReports: (role: UserRole | null | undefined) => hasRole(role, "viewer"),
 };

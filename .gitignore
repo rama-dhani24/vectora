@@ -26,6 +26,7 @@
 
 # debug
 npm-debug.log*
+*-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
@@ -40,13 +41,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# firebase
-firebase-debug.log*
-firestore-debug.log*
-ui-debug.log*
-database-debug.log*
-pubsub-debug.log*
-.emulator-data/
-/functions/lib/
-/functions/node_modules/
+# supabase
+/supabase/.temp/
 !.env.example

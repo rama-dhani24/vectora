@@ -3,14 +3,14 @@ import { can, hasRole, isUserRole, navItemsFor } from "@/lib/auth/roles";
 
 describe("roles", () => {
   it("orders roles by privilege", () => {
-    expect(hasRole("super_admin", "admin")).toBe(true);
-    expect(hasRole("admin", "super_admin")).toBe(false);
+    expect(hasRole("owner", "admin")).toBe(true);
+    expect(hasRole("admin", "owner")).toBe(false);
     expect(hasRole("viewer", "viewer")).toBe(true);
     expect(hasRole(null, "viewer")).toBe(false);
   });
 
   it("limits sensitive actions to super admins", () => {
-    expect(can.manageUsers("super_admin")).toBe(true);
+    expect(can.manageUsers("owner")).toBe(true);
     expect(can.manageUsers("admin")).toBe(false);
     expect(can.reopenChallenge("admin")).toBe(false);
     expect(can.writeData("viewer")).toBe(false);

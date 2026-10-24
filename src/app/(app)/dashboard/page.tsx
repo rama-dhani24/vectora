@@ -14,52 +14,36 @@ import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
 import { requireUser } from "@/lib/auth/dal";
-import { adminDb } from "@/lib/firebase/admin";
 import { aggregateTransactions } from "@/lib/domain/aggregation";
 import { formatTzs } from "@/lib/money";
 import type { ChallengeTotals, Transaction } from "@/types";
+import { createClient } from "@/lib/supabase/server";
+import { mapChallenge, mapTransaction } from "@/lib/supabase/mappers";
 
 export const metadata: Metadata = { title: "Dashboard" };
 
 const EMPTY_TOTALS: ChallengeTotals = { units: 0, stock: 0, final: 0, participants: 0 };
 
-async function getOpenChallenge(): Promise<{
-  id: string;
-  title: string;
-  totals: ChallengeTotals;
-} | null> {
-  const snap = await adminDb()
-    .collection("challenges")
-    .where("status", "==", "open")
-    .limit(1)
-    .get();
-  const doc = snap.docs[0];
-  if (!doc) return null;
-  const data = doc.data();
-  const totals = data.totals as Partial<ChallengeTotals> | undefined;
-  return {
-    id: doc.id,
-    title: typeof data.title === "string" ? data.title : "",
-    totals: { ...EMPTY_TOTALS, ...totals },
-  };
-}
-
 export default async function DashboardPage() {
   const user = await requireUser();
   const t = await getTranslations();
-  const challenge = await getOpenChallenge();
-  const transactionDocs = challenge
-    ? await adminDb()
-        .collection("transactions")
-        .where("challengeId", "==", challenge.id)
+  const supabase = await createClient();
+  const { data: challengeRow } = await supabase
+    .from("challenges")
+    .select("*")
+    .eq("group_id", user.groupId)
+    .eq("status", "open")
+    .maybeSingle();
+  const challenge = challengeRow ? mapChallenge(challengeRow) : null;
+  const { data: transactionRows } = challenge
+    ? await supabase
+        .from("transactions")
+        .select("*")
+        .eq("group_id", user.groupId)
+        .eq("challenge_id", challenge.id)
         .limit(10000)
-        .get()
-    : null;
-  const transactions: Transaction[] =
-    transactionDocs?.docs.map((doc) => ({
-      id: doc.id,
-      ...(doc.data() as Omit<Transaction, "id">),
-    })) ?? [];
+    : { data: [] };
+  const transactions: Transaction[] = (transactionRows ?? []).map(mapTransaction);
   const aggregate = aggregateTransactions(transactions);
   const totals = challenge ? aggregate.totals : EMPTY_TOTALS;
   const topInvestors = aggregate.investors.toSorted((a, b) => b.total - a.total).slice(0, 5);

@@ -3,20 +3,22 @@ import { getTranslations } from "next-intl/server";
 import { PageHeader } from "@/components/layout/page-header";
 import { InvestorsManager } from "@/features/investors/investors-manager";
 import { requireRole } from "@/lib/auth/dal";
-import { adminDb } from "@/lib/firebase/admin";
-import { serializeFirestoreData } from "@/lib/firebase/serialize";
 import type { Investor } from "@/types";
+import { createClient } from "@/lib/supabase/server";
+import { mapInvestor } from "@/lib/supabase/mappers";
 
 export const metadata: Metadata = { title: "Investors" };
 
 export default async function Page() {
-  await requireRole("admin");
+  const user = await requireRole("admin");
   const t = await getTranslations();
-  const snapshot = await adminDb().collection("investors").orderBy("nameLower").get();
-  const investors: Investor[] = snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...(serializeFirestoreData(doc.data()) as Omit<Investor, "id">),
-  }));
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("investors")
+    .select("*")
+    .eq("group_id", user.groupId)
+    .order("name_lower");
+  const investors: Investor[] = (data ?? []).map(mapInvestor);
   return (
     <>
       <PageHeader title={t("nav.investors")} description={t("pages.investors")} />

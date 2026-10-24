@@ -3,13 +3,12 @@
 import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { signOut } from "firebase/auth";
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { getClientServices } from "@/lib/firebase/client";
+import { createClient } from "@/lib/supabase/client";
 import type { SessionUser } from "@/types";
 
 function initials(name: string): string {
@@ -28,8 +27,7 @@ export function UserMenu({ user }: { user: SessionUser }) {
 
   function handleSignOut() {
     startTransition(async () => {
-      await fetch("/api/auth/session", { method: "DELETE" });
-      await signOut(getClientServices().auth);
+      await createClient().auth.signOut();
       toast.success(t("auth.signedOut"));
       router.replace("/login");
       router.refresh();

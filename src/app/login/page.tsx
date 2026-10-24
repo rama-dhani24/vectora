@@ -7,6 +7,7 @@ import { LoginForm } from "@/features/auth/login-form";
 import { getCurrentUser } from "@/lib/auth/dal";
 import { safeNextPath } from "@/lib/auth/redirect";
 import { ArrowUpRight, ShieldCheck, TrendingUp } from "lucide-react";
+import Link from "next/link";
 
 export const metadata: Metadata = { title: "Sign in" };
 
@@ -67,6 +68,12 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
             <p className="text-muted-foreground mt-2 text-sm">{t("subtitle")}</p>
           </div>
           <LoginForm nextPath={nextPath} />
+          <p className="text-muted-foreground mt-5 text-center text-sm">
+            New to Vectora?{" "}
+            <Link href="/signup" className="text-primary underline">
+              Create a group
+            </Link>
+          </p>
           <p className="text-muted-foreground mt-5 text-center text-xs">
             {auth("secureWorkspace")}
           </p>

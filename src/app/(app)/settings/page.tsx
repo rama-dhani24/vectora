@@ -3,17 +3,38 @@ import { getTranslations } from "next-intl/server";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { listUsers } from "@/features/users/queries";
-import { UsersManager } from "@/features/users/users-manager";
 import { requireUser } from "@/lib/auth/dal";
-import { can } from "@/lib/auth/roles";
+import { createClient } from "@/lib/supabase/server";
+import {
+  AdminInvitesManager,
+  type AdminInviteRow,
+} from "@/features/settings/admin-invites-manager";
 
 export const metadata: Metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
   const user = await requireUser();
   const t = await getTranslations();
-  const users = can.manageUsers(user.role) ? await listUsers() : null;
+  let adminInvitations: AdminInviteRow[] = [];
+  let availableAdminSeats = 0;
+  if (user.role === "owner") {
+    const supabase = await createClient();
+    const [{ data: inviteRows }, { count: activeAdminCount }] = await Promise.all([
+      supabase.rpc("list_group_admin_invites"),
+      supabase
+        .from("group_memberships")
+        .select("user_id", { count: "exact", head: true })
+        .eq("group_id", user.groupId)
+        .eq("role", "admin")
+        .eq("status", "active"),
+    ]);
+    adminInvitations = (inviteRows ?? []) as AdminInviteRow[];
+    const pendingInviteCount = adminInvitations.filter(
+      (invite) =>
+        !invite.accepted_at && !invite.canceled_at && Date.parse(invite.expires_at) > Date.now(),
+    ).length;
+    availableAdminSeats = Math.max(0, 2 - (activeAdminCount ?? 0) - pendingInviteCount);
+  }
 
   return (
     <>
@@ -39,23 +60,34 @@ export default async function SettingsPage() {
                   <Badge variant="secondary">{t(`roles.${user.role}`)}</Badge>
                 </dd>
               </div>
+              <div className="sm:col-span-3">
+                <dt className="text-muted-foreground">Investment group</dt>
+                <dd className="font-medium">{user.groupName}</dd>
+              </div>
             </dl>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{t("settings.users")}</CardTitle>
+            <CardTitle className="text-base">Private group workspace</CardTitle>
             <CardDescription>
-              {users ? t("settings.usersDescription") : t("settings.readOnly")}
+              Investors, challenges, transactions, and reports are scoped to this group.
             </CardDescription>
           </CardHeader>
-          {users ? (
-            <CardContent>
-              <UsersManager users={users} currentUid={user.uid} />
-            </CardContent>
-          ) : null}
+          <CardContent>
+            <p className="text-muted-foreground text-sm">
+              Your access level is <Badge variant="secondary">{t(`roles.${user.role}`)}</Badge>.
+              Other groups cannot access this group&apos;s data.
+            </p>
+          </CardContent>
         </Card>
+        {user.role === "owner" ? (
+          <AdminInvitesManager
+            invitations={adminInvitations}
+            availableSeats={availableAdminSeats}
+          />
+        ) : null}
       </div>
     </>
   );

@@ -179,7 +179,7 @@ export function ChallengesManager({
                         </Button>
                       )}
                     </>
-                  ) : role === "super_admin" ? (
+                  ) : role === "owner" ? (
                     <Button
                       size="sm"
                       variant="outline"

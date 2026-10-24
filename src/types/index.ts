@@ -1,7 +1,6 @@
-export const USER_ROLES = ["super_admin", "admin", "viewer"] as const;
+export const USER_ROLES = ["owner", "admin", "viewer"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
-/** Mirror of the custom claim, stored at users/{uid}. Written only by trusted server code. */
 export interface UserProfile {
   uid: string;
   name: string;
@@ -18,6 +17,8 @@ export interface SessionUser {
   name: string;
   email: string;
   role: UserRole;
+  groupId: string;
+  groupName: string;
 }
 
 export type InvestorStatus = "active" | "inactive";
@@ -29,7 +30,7 @@ export interface Investor {
   phone?: string;
   notes?: string;
   status: InvestorStatus;
-  /** Reserved for the future investor portal: the Firebase Auth uid linked to this investor. */
+  /** Reserved for the future investor portal. */
   portalUid?: string;
   createdAt: string;
   updatedAt: string;

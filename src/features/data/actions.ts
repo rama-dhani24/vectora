@@ -1,24 +1,26 @@
 "use server";
 
-import { FieldValue } from "firebase-admin/firestore";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { AuthorizationError, assertRole } from "@/lib/auth/dal";
-import { adminDb } from "@/lib/firebase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { challengeSchema } from "@/lib/validators/challenges";
 import { investorSchema } from "@/lib/validators/investors";
 import { transactionSchema } from "@/lib/validators/transactions";
-import type { Challenge, Transaction } from "@/types";
+import { mapTransaction } from "@/lib/supabase/mappers";
 
 export type DataActionResult =
-  | { ok: true; id?: string; duplicate?: boolean }
-  | { ok: false; error: string };
+  { ok: true; id?: string; duplicate?: boolean } | { ok: false; error: string };
 
-const idSchema = z.string().min(1).max(128);
+const idSchema = z.string().uuid();
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof AuthorizationError) return error.message;
   if (error instanceof z.ZodError) return error.issues[0]?.message ?? "Invalid input";
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = String(error.code);
+    if (code === "23505") return "A record with the same unique value already exists.";
+  }
   console.error("[data] action failed", error);
   return "Something went wrong. Please try again.";
 }
@@ -29,23 +31,25 @@ function revalidateData(): void {
   }
 }
 
-function auditEntry(
+async function writeAudit(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  actor: Awaited<ReturnType<typeof assertRole>>,
   entity: "investor" | "challenge" | "transaction",
   entityId: string,
   action: string,
-  before: Record<string, unknown> | null,
-  after: Record<string, unknown> | null,
-  userId: string,
+  before: unknown,
+  after: unknown,
 ) {
-  return {
+  const { error } = await supabase.from("audit_logs").insert({
+    group_id: actor.groupId,
     entity,
-    entityId,
+    entity_id: entityId,
     action,
     before,
     after,
-    userId,
-    timestamp: FieldValue.serverTimestamp(),
-  };
+    user_id: actor.uid,
+  });
+  if (error) throw error;
 }
 
 export async function saveInvestorAction(
@@ -55,40 +59,46 @@ export async function saveInvestorAction(
   try {
     const actor = await assertRole("admin");
     const data = investorSchema.parse(input);
-    const db = adminDb();
-    const nameLower = data.name.toLocaleLowerCase("en");
-    const ref = id
-      ? db.collection("investors").doc(idSchema.parse(id))
-      : db.collection("investors").doc();
-    const auditRef = db.collection("auditLogs").doc();
-    const now = new Date().toISOString();
-    const result = await db.runTransaction(async (transaction) => {
-      const old = id ? await transaction.get(ref) : null;
-      const duplicates = await transaction.get(
-        db.collection("investors").where("nameLower", "==", nameLower),
-      );
-      if (old && !old.exists) return { error: "Investor not found." as const };
-      if (duplicates.docs.some((doc) => doc.id !== id)) {
-        return { error: "An investor with this name already exists." as const };
-      }
-      const record = {
-        name: data.name,
-        nameLower,
-        phone: data.phone,
-        notes: data.notes,
-        status: data.status,
-        ...(old ? { updatedAt: now } : { createdAt: now, updatedAt: now }),
-      };
-      transaction.set(ref, record, { merge: Boolean(old) });
-      transaction.create(
-        auditRef,
-        auditEntry("investor", ref.id, old ? "update" : "create", old?.data() ?? null, record, actor.uid),
-      );
-      return { error: null };
-    });
-    if (result.error) return { ok: false, error: result.error };
+    const supabase = await createClient();
+    const values = {
+      group_id: actor.groupId,
+      name: data.name,
+      name_lower: data.name.toLocaleLowerCase("en"),
+      phone: data.phone,
+      notes: data.notes,
+      status: data.status,
+      updated_at: new Date().toISOString(),
+    };
+    let before: unknown = null;
+    if (id) {
+      const investorId = idSchema.parse(id);
+      const old = await supabase
+        .from("investors")
+        .select("*")
+        .eq("group_id", actor.groupId)
+        .eq("id", investorId)
+        .maybeSingle();
+      if (!old.data) return { ok: false, error: "Investor not found." };
+      before = old.data;
+      const { error } = await supabase
+        .from("investors")
+        .update(values)
+        .eq("group_id", actor.groupId)
+        .eq("id", investorId);
+      if (error) throw error;
+      await writeAudit(supabase, actor, "investor", investorId, "update", before, values);
+      revalidateData();
+      return { ok: true, id: investorId };
+    }
+    const { data: created, error } = await supabase
+      .from("investors")
+      .insert(values)
+      .select("id")
+      .single();
+    if (error) throw error;
+    await writeAudit(supabase, actor, "investor", created.id, "create", before, values);
     revalidateData();
-    return { ok: true, id: ref.id };
+    return { ok: true, id: created.id };
   } catch (error) {
     return { ok: false, error: getErrorMessage(error) };
   }
@@ -98,26 +108,29 @@ export async function deleteInvestorAction(id: string): Promise<DataActionResult
   try {
     const actor = await assertRole("admin");
     const investorId = idSchema.parse(id);
-    const db = adminDb();
-    const ref = db.collection("investors").doc(investorId);
-    const auditRef = db.collection("auditLogs").doc();
-    const result = await db.runTransaction(async (transaction) => {
-      const snap = await transaction.get(ref);
-      const linkedTransactions = await transaction.get(
-        db.collection("transactions").where("investorId", "==", investorId).limit(1),
-      );
-      if (!snap.exists) return { error: "Investor not found." as const };
-      if (!linkedTransactions.empty) {
-        return { error: "This investor has transactions. Mark them inactive instead." as const };
-      }
-      transaction.delete(ref);
-      transaction.create(
-        auditRef,
-        auditEntry("investor", investorId, "delete", snap.data() ?? null, null, actor.uid),
-      );
-      return { error: null };
-    });
-    if (result.error) return { ok: false, error: result.error };
+    const supabase = await createClient();
+    const old = await supabase
+      .from("investors")
+      .select("*")
+      .eq("group_id", actor.groupId)
+      .eq("id", investorId)
+      .maybeSingle();
+    if (!old.data) return { ok: false, error: "Investor not found." };
+    const linked = await supabase
+      .from("transactions")
+      .select("id")
+      .eq("group_id", actor.groupId)
+      .eq("investor_id", investorId)
+      .limit(1);
+    if (linked.data?.length)
+      return { ok: false, error: "This investor has transactions. Mark them inactive instead." };
+    const { error } = await supabase
+      .from("investors")
+      .delete()
+      .eq("group_id", actor.groupId)
+      .eq("id", investorId);
+    if (error) throw error;
+    await writeAudit(supabase, actor, "investor", investorId, "delete", old.data, null);
     revalidateData();
     return { ok: true };
   } catch (error) {
@@ -129,33 +142,44 @@ export async function bulkCreateInvestorsAction(input: unknown): Promise<DataAct
   try {
     const actor = await assertRole("admin");
     const rows = z.array(investorSchema).min(1).max(250).parse(input);
-    const db = adminDb();
-    const existing = await db.collection("investors").get();
-    const names = new Set(existing.docs.map((doc) => String(doc.get("nameLower") ?? "")));
-    const repeated = new Set<string>();
+    const supabase = await createClient();
+    const existing = await supabase
+      .from("investors")
+      .select("name_lower")
+      .eq("group_id", actor.groupId);
+    const names = new Set((existing.data ?? []).map((row) => row.name_lower));
+    const batchNames = new Set<string>();
     const normalized = rows.map((row) => {
       const nameLower = row.name.toLocaleLowerCase("en");
-      if (names.has(nameLower) || repeated.has(nameLower)) throw new Error(`Duplicate investor: ${row.name}`);
-      repeated.add(nameLower);
-      return { ...row, nameLower };
+      if (names.has(nameLower) || batchNames.has(nameLower))
+        throw new Error(`Duplicate investor: ${row.name}`);
+      batchNames.add(nameLower);
+      return {
+        group_id: actor.groupId,
+        name: row.name,
+        name_lower: nameLower,
+        phone: row.phone,
+        notes: row.notes,
+        status: row.status,
+      };
     });
-    const batch = db.batch();
-    const now = new Date().toISOString();
-    for (const row of normalized) {
-      const ref = db.collection("investors").doc();
-      const record = { ...row, createdAt: now, updatedAt: now };
-      batch.set(ref, record);
-      batch.create(db.collection("auditLogs").doc(), {
+    const { data, error } = await supabase
+      .from("investors")
+      .insert(normalized)
+      .select("id,name,name_lower,phone,notes,status");
+    if (error) throw error;
+    const { error: auditError } = await supabase.from("audit_logs").insert(
+      (data ?? []).map((row) => ({
+        group_id: actor.groupId,
         entity: "investor",
-        entityId: ref.id,
+        entity_id: row.id,
         action: "bulk_import",
         before: null,
-        after: record,
-        userId: actor.uid,
-        timestamp: FieldValue.serverTimestamp(),
-      });
-    }
-    await batch.commit();
+        after: row,
+        user_id: actor.uid,
+      })),
+    );
+    if (auditError) throw auditError;
     revalidateData();
     return { ok: true };
   } catch (error) {
@@ -170,65 +194,59 @@ export async function saveChallengeAction(
   try {
     const actor = await assertRole("admin");
     const data = challengeSchema.parse(input);
-    const db = adminDb();
-    const ref = id
-      ? db.collection("challenges").doc(idSchema.parse(id))
-      : db.collection("challenges").doc();
-    const openChallengeRef = db.collection("system").doc("openChallenge");
-    const auditRef = db.collection("auditLogs").doc();
-    const now = new Date().toISOString();
-    const transactionResult = await db.runTransaction(async (transaction) => {
-      const old = id ? await transaction.get(ref) : null;
-      const openLock = await transaction.get(openChallengeRef);
-      const oldChallenge = old?.data() as Partial<Challenge> | undefined;
-      if (old && !old.exists) return { error: "Challenge not found." as const };
-      if (oldChallenge?.status === "closed") {
-        return { error: "Closed challenges are locked. Reopen them as a Super Admin first." as const };
-      }
-      if (data.status === "closed" && !old) {
-        return { error: "Create the challenge before closing it." as const };
-      }
-      const openChallenges =
-        data.status === "open"
-          ? await transaction.get(db.collection("challenges").where("status", "==", "open"))
-          : null;
-      const lockedId = openLock.get("challengeId");
-      if (
-        data.status === "open" &&
-        ((typeof lockedId === "string" && lockedId !== ref.id) ||
-          openChallenges?.docs.some((doc) => doc.id !== ref.id))
-      ) {
-        return { error: "Close the current open challenge before opening another." as const };
-      }
-      const record = {
+    const supabase = await createClient();
+    let before: Record<string, unknown> | null = null;
+    if (id) {
+      const challengeId = idSchema.parse(id);
+      const old = await supabase
+        .from("challenges")
+        .select("*")
+        .eq("group_id", actor.groupId)
+        .eq("id", challengeId)
+        .maybeSingle();
+      if (!old.data) return { ok: false, error: "Challenge not found." };
+      before = old.data;
+      if (old.data.status === "closed")
+        return {
+          ok: false,
+          error: "Closed challenges are locked. Ask the Super Admin to reopen this challenge.",
+        };
+      const { error } = await supabase
+        .from("challenges")
+        .update({
+          title: data.title,
+          month: data.month,
+          year: data.year,
+          start_date: data.startDate,
+          end_date: data.endDate,
+          status: data.status,
+        })
+        .eq("group_id", actor.groupId)
+        .eq("id", challengeId);
+      if (error) throw error;
+      await writeAudit(supabase, actor, "challenge", challengeId, "update", before, data);
+      revalidateData();
+      return { ok: true, id: challengeId };
+    }
+    if (data.status === "closed")
+      return { ok: false, error: "Create the challenge before closing it." };
+    const { data: created, error } = await supabase
+      .from("challenges")
+      .insert({
+        group_id: actor.groupId,
         title: data.title,
         month: data.month,
         year: data.year,
-        startDate: data.startDate,
-        endDate: data.endDate,
+        start_date: data.startDate,
+        end_date: data.endDate,
         status: data.status,
-        totals: oldChallenge?.totals ?? { units: 0, stock: 0, final: 0, participants: 0 },
-        ...(old ? { updatedAt: now } : { createdAt: now, updatedAt: now }),
-      };
-      transaction.set(ref, record, { merge: Boolean(old) });
-      if (data.status === "open") transaction.set(openChallengeRef, { challengeId: ref.id });
-      else if (lockedId === ref.id) transaction.delete(openChallengeRef);
-      transaction.create(
-        auditRef,
-        auditEntry(
-          "challenge",
-          ref.id,
-          old ? "update" : "create",
-          old?.data() ?? null,
-          record,
-          actor.uid,
-        ),
-      );
-      return { error: null, before: old?.data() ?? null, record };
-    });
-    if (transactionResult.error) return { ok: false, error: transactionResult.error };
+      })
+      .select("id")
+      .single();
+    if (error) throw error;
+    await writeAudit(supabase, actor, "challenge", created.id, "create", null, data);
     revalidateData();
-    return { ok: true, id: ref.id };
+    return { ok: true, id: created.id };
   } catch (error) {
     return { ok: false, error: getErrorMessage(error) };
   }
@@ -240,50 +258,28 @@ export async function setChallengeStatusAction(
 ): Promise<DataActionResult> {
   try {
     const actor = await assertRole("admin");
-    const parsedStatus = z.enum(["open", "closed"]).parse(status);
     const challengeId = idSchema.parse(id);
-    const db = adminDb();
-    const ref = db.collection("challenges").doc(challengeId);
-    const openChallengeRef = db.collection("system").doc("openChallenge");
-    const auditRef = db.collection("auditLogs").doc();
-    const updatedAt = new Date().toISOString();
-    const result = await db.runTransaction(async (transaction) => {
-      const snap = await transaction.get(ref);
-      const openLock = await transaction.get(openChallengeRef);
-      if (!snap.exists) return { error: "Challenge not found." as const };
-      const before = snap.data() as Record<string, unknown>;
-      if (before.status === "closed" && parsedStatus === "open" && actor.role !== "super_admin") {
-        return { error: "Only a Super Admin can reopen a closed challenge." as const };
-      }
-      const openChallenges =
-        parsedStatus === "open"
-          ? await transaction.get(db.collection("challenges").where("status", "==", "open"))
-          : null;
-      const lockedId = openLock.get("challengeId");
-      if (
-        parsedStatus === "open" &&
-        ((typeof lockedId === "string" && lockedId !== challengeId) ||
-          openChallenges?.docs.some((doc) => doc.id !== challengeId))
-      ) {
-        return { error: "Close the current open challenge before opening another." as const };
-      }
-      transaction.update(ref, { status: parsedStatus, updatedAt });
-      if (parsedStatus === "open") transaction.set(openChallengeRef, { challengeId });
-      else if (lockedId === challengeId) transaction.delete(openChallengeRef);
-      transaction.create(
-        auditRef,
-        auditEntry(
-          "challenge",
-          challengeId,
-          parsedStatus === "open" && before.status === "closed" ? "reopen" : parsedStatus,
-          { status: before.status },
-          { status: parsedStatus },
-          actor.uid,
-        ),
-      );
-      return { error: null, before };
+    const parsedStatus = z.enum(["open", "closed"]).parse(status);
+    const supabase = await createClient();
+    const old = await supabase
+      .from("challenges")
+      .select("status")
+      .eq("group_id", actor.groupId)
+      .eq("id", challengeId)
+      .maybeSingle();
+    if (!old.data) return { ok: false, error: "Challenge not found." };
+    if (old.data.status === "closed" && parsedStatus === "open" && actor.role !== "owner") {
+      return { ok: false, error: "Only the Super Admin can reopen a closed challenge." };
+    }
+    const { error } = await supabase
+      .from("challenges")
+      .update({ status: parsedStatus })
+      .eq("group_id", actor.groupId)
+      .eq("id", challengeId);
+    if (error) throw error;
+    await writeAudit(supabase, actor, "challenge", challengeId, parsedStatus, old.data, {
+      status: parsedStatus,
     });
-    if (result.error) return { ok: false, error: result.error };
     revalidateData();
     return { ok: true };
   } catch (error) {
@@ -298,103 +294,127 @@ export async function saveTransactionAction(
   try {
     const actor = await assertRole("admin");
     const data = transactionSchema.parse(input);
-    const db = adminDb();
-    const challengeRef = db.collection("challenges").doc(data.challengeId);
-    const ref = id ? db.collection("transactions").doc(idSchema.parse(id)) : db.collection("transactions").doc();
-    const investorRef = db.collection("investors").doc(data.investorId);
-    const auditRef = db.collection("auditLogs").doc();
-    const now = new Date().toISOString();
-    const result = await db.runTransaction(async (transaction) => {
-      const [challengeSnap, investorSnap, old, duplicateDocs, referenceDocs] = await Promise.all([
-        transaction.get(challengeRef),
-        transaction.get(investorRef),
-        id ? transaction.get(ref) : Promise.resolve(null),
-        transaction.get(
-          db.collection("transactions").where("investorId", "==", data.investorId),
-        ),
+    const transactionId = id ? idSchema.parse(id) : null;
+    const supabase = await createClient();
+    const [challengeResult, investorResult, oldResult, duplicateResult, referenceResult] =
+      await Promise.all([
+        supabase
+          .from("challenges")
+          .select("id,status,end_date")
+          .eq("group_id", actor.groupId)
+          .eq("id", data.challengeId)
+          .maybeSingle(),
+        supabase
+          .from("investors")
+          .select("id,name,status")
+          .eq("group_id", actor.groupId)
+          .eq("id", data.investorId)
+          .maybeSingle(),
+        transactionId
+          ? supabase
+              .from("transactions")
+              .select("*")
+              .eq("group_id", actor.groupId)
+              .eq("id", transactionId)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        supabase
+          .from("transactions")
+          .select("id,amount,type,date")
+          .eq("group_id", actor.groupId)
+          .eq("investor_id", data.investorId),
         data.reference
-          ? transaction.get(
-              db.collection("transactions").where("reference", "==", data.reference),
-            )
-          : Promise.resolve(null),
+          ? supabase
+              .from("transactions")
+              .select("id")
+              .eq("group_id", actor.groupId)
+              .eq("reference", data.reference)
+          : Promise.resolve({ data: [], error: null }),
       ]);
-      if (!challengeSnap.exists) return { kind: "error" as const, error: "Challenge not found." };
-      if (challengeSnap.get("status") !== "open") {
-        return {
-          kind: "error" as const,
-          error: "Transactions can only be added to an open challenge.",
-        };
-      }
-      if (!investorSnap.exists || investorSnap.get("status") !== "active") {
-        return { kind: "error" as const, error: "Choose an active investor." };
-      }
-      const investorName = investorSnap.get("name");
-      if (typeof investorName !== "string") {
-        return { kind: "error" as const, error: "Choose an active investor." };
-      }
-      if (old && !old.exists) {
-        return { kind: "error" as const, error: "Transaction not found." };
-      }
-      const previous = old?.data() as Partial<Transaction> | undefined;
-      if (previous?.challengeId && previous.challengeId !== data.challengeId) {
-        const priorChallenge = await transaction.get(
-          db.collection("challenges").doc(previous.challengeId),
-        );
-        if (priorChallenge.get("status") !== "open") {
-          return {
-            kind: "error" as const,
-            error: "Transactions in closed challenges cannot be edited.",
-          };
-        }
-      }
-      const duplicate = duplicateDocs.docs.some((doc) => {
-        if (doc.id === id) return false;
-        const item = doc.data();
-        return item.amount === data.amount && item.type === data.type && item.date === data.date;
-      });
-      const referenceDuplicate = referenceDocs?.docs.some((doc) => doc.id !== id) ?? false;
-      if ((duplicate || referenceDuplicate) && !data.allowDuplicate) {
-        return { kind: "duplicate" as const };
-      }
-      const record = {
-        challengeId: data.challengeId,
-        investorId: data.investorId,
-        investorName,
-        type: data.type,
-        amount: data.amount,
-        date: data.date,
-        institution: data.institution,
-        reference: data.reference,
-        proofUrl: data.proofUrl,
-        proofPath: data.proofPath,
-        rawMessage: data.rawMessage,
-        notes: data.notes,
-        status: old ? previous?.status ?? "pending" : "pending",
-        source: previous?.source ?? "manual",
-        createdBy: previous?.createdBy ?? actor.uid,
-        createdAt: previous?.createdAt ?? now,
-        updatedAt: now,
-        ...(previous?.verifiedBy ? { verifiedBy: previous.verifiedBy } : {}),
-        ...(previous?.verifiedAt ? { verifiedAt: previous.verifiedAt } : {}),
-      };
-      transaction.set(ref, record);
-      transaction.create(
-        auditRef,
-        auditEntry(
-          "transaction",
-          ref.id,
-          old ? "update" : "create",
-          old?.data() ?? null,
-          record,
-          actor.uid,
-        ),
-      );
-      return { kind: "success" as const, id: ref.id };
-    });
-    if (result.kind === "error") return { ok: false, error: result.error };
-    if (result.kind === "duplicate") return { ok: true, duplicate: true };
+    const challenge = challengeResult.data;
+    const investor = investorResult.data;
+    const old = oldResult.data as {
+      challenge_id: string;
+      status: string;
+      source: string;
+      created_by: string;
+      verified_by: string | null;
+      verified_at: string | null;
+    } | null;
+    if (!challenge) return { ok: false, error: "Challenge not found." };
+    if (challenge.status !== "open")
+      return { ok: false, error: "Transactions can only be added to an open challenge." };
+    if (!investor || investor.status !== "active")
+      return { ok: false, error: "Choose an active investor." };
+    if (transactionId && !old) return { ok: false, error: "Transaction not found." };
+    if (old?.challenge_id !== data.challengeId && old?.challenge_id) {
+      const prior = await supabase
+        .from("challenges")
+        .select("status")
+        .eq("group_id", actor.groupId)
+        .eq("id", old.challenge_id)
+        .maybeSingle();
+      if (prior.data?.status !== "open")
+        return { ok: false, error: "Transactions in closed challenges cannot be edited." };
+    }
+    const duplicate = (duplicateResult.data ?? []).some(
+      (row) =>
+        row.id !== transactionId &&
+        row.amount === data.amount &&
+        row.type === data.type &&
+        row.date === data.date,
+    );
+    const referenceDuplicate = (referenceResult.data ?? []).some((row) => row.id !== transactionId);
+    if ((duplicate || referenceDuplicate) && !data.allowDuplicate)
+      return { ok: true, duplicate: true };
+    const values = {
+      group_id: actor.groupId,
+      challenge_id: data.challengeId,
+      investor_id: data.investorId,
+      investor_name: investor.name,
+      type: data.type,
+      amount: data.amount,
+      date: data.date,
+      institution: data.institution,
+      reference: data.reference,
+      proof_url: "",
+      proof_path: data.proofPath,
+      raw_message: data.rawMessage,
+      notes: data.notes,
+      status: old?.status ?? "pending",
+      source: old?.source ?? "manual",
+      created_by: old?.created_by ?? actor.uid,
+      verified_by: old?.verified_by ?? null,
+      verified_at: old?.verified_at ?? null,
+    };
+    const result = transactionId
+      ? await supabase
+          .from("transactions")
+          .update(values)
+          .eq("group_id", actor.groupId)
+          .eq("id", transactionId)
+          .select("id")
+          .single()
+      : await supabase.from("transactions").insert(values).select("id").single();
+    if (result.error) throw result.error;
+    const transactionResult = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("group_id", actor.groupId)
+      .eq("id", result.data.id)
+      .single();
+    const transaction = transactionResult.data ? mapTransaction(transactionResult.data) : values;
+    await writeAudit(
+      supabase,
+      actor,
+      "transaction",
+      result.data.id,
+      transactionId ? "update" : "create",
+      old,
+      transaction,
+    );
     revalidateData();
-    return { ok: true, id: result.id };
+    return { ok: true, id: result.data.id };
   } catch (error) {
     return { ok: false, error: getErrorMessage(error) };
   }
@@ -406,42 +426,37 @@ export async function setTransactionStatusAction(
 ): Promise<DataActionResult> {
   try {
     const actor = await assertRole("admin");
+    const transactionId = idSchema.parse(id);
     const parsedStatus = z.enum(["verified", "rejected"]).parse(status);
-    const txId = idSchema.parse(id);
-    const db = adminDb();
-    const ref = db.collection("transactions").doc(txId);
-    const now = new Date().toISOString();
-    const auditRef = db.collection("auditLogs").doc();
-    const result = await db.runTransaction(async (transaction) => {
-      const snap = await transaction.get(ref);
-      if (!snap.exists) return { error: "Transaction not found." as const };
-      const before = snap.data() as Record<string, unknown>;
-      const challenge = await transaction.get(
-        db.collection("challenges").doc(String(before.challengeId ?? "")),
-      );
-      if (!challenge.exists || challenge.get("status") !== "open") {
-        return { error: "Transactions in closed challenges are locked." as const };
-      }
-      const after = {
-        status: parsedStatus,
-        updatedAt: now,
-        ...(parsedStatus === "verified" ? { verifiedBy: actor.uid, verifiedAt: now } : {}),
-      };
-      transaction.update(ref, after);
-      transaction.create(
-        auditRef,
-        auditEntry(
-          "transaction",
-          txId,
-          parsedStatus,
-          { status: before.status },
-          { status },
-          actor.uid,
-        ),
-      );
-      return { error: null };
-    });
-    if (result.error) return { ok: false, error: result.error };
+    const supabase = await createClient();
+    const old = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("group_id", actor.groupId)
+      .eq("id", transactionId)
+      .maybeSingle();
+    if (!old.data) return { ok: false, error: "Transaction not found." };
+    const challenge = await supabase
+      .from("challenges")
+      .select("status")
+      .eq("group_id", actor.groupId)
+      .eq("id", old.data.challenge_id)
+      .maybeSingle();
+    if (challenge.data?.status !== "open")
+      return { ok: false, error: "Transactions in closed challenges are locked." };
+    const values = {
+      status: parsedStatus,
+      ...(parsedStatus === "verified"
+        ? { verified_by: actor.uid, verified_at: new Date().toISOString() }
+        : {}),
+    };
+    const { error } = await supabase
+      .from("transactions")
+      .update(values)
+      .eq("group_id", actor.groupId)
+      .eq("id", transactionId);
+    if (error) throw error;
+    await writeAudit(supabase, actor, "transaction", transactionId, parsedStatus, old.data, values);
     revalidateData();
     return { ok: true };
   } catch (error) {
@@ -452,28 +467,30 @@ export async function setTransactionStatusAction(
 export async function deleteTransactionAction(id: string): Promise<DataActionResult> {
   try {
     const actor = await assertRole("admin");
-    const txId = idSchema.parse(id);
-    const db = adminDb();
-    const ref = db.collection("transactions").doc(txId);
-    const auditRef = db.collection("auditLogs").doc();
-    const result = await db.runTransaction(async (transaction) => {
-      const snap = await transaction.get(ref);
-      if (!snap.exists) return { error: "Transaction not found." as const };
-      const before = snap.data() as Record<string, unknown>;
-      const challenge = await transaction.get(
-        db.collection("challenges").doc(String(before.challengeId ?? "")),
-      );
-      if (!challenge.exists || challenge.get("status") !== "open") {
-        return { error: "Transactions in closed challenges are locked." as const };
-      }
-      transaction.delete(ref);
-      transaction.create(
-        auditRef,
-        auditEntry("transaction", txId, "delete", before, null, actor.uid),
-      );
-      return { error: null };
-    });
-    if (result.error) return { ok: false, error: result.error };
+    const transactionId = idSchema.parse(id);
+    const supabase = await createClient();
+    const old = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("group_id", actor.groupId)
+      .eq("id", transactionId)
+      .maybeSingle();
+    if (!old.data) return { ok: false, error: "Transaction not found." };
+    const challenge = await supabase
+      .from("challenges")
+      .select("status")
+      .eq("group_id", actor.groupId)
+      .eq("id", old.data.challenge_id)
+      .maybeSingle();
+    if (challenge.data?.status !== "open")
+      return { ok: false, error: "Transactions in closed challenges are locked." };
+    const { error } = await supabase
+      .from("transactions")
+      .delete()
+      .eq("group_id", actor.groupId)
+      .eq("id", transactionId);
+    if (error) throw error;
+    await writeAudit(supabase, actor, "transaction", transactionId, "delete", old.data, null);
     revalidateData();
     return { ok: true };
   } catch (error) {

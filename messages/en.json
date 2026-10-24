@@ -31,7 +31,7 @@
     "comingSoonBody": "This module is part of the delivery plan and will be built in Milestone {milestone}."
   },
   "roles": {
-    "super_admin": "Super Admin",
+    "owner": "Super Admin",
     "admin": "Admin",
     "viewer": "Viewer"
   },
@@ -43,16 +43,12 @@
     "adminAccess": "Private access for your admin team",
     "signInHeading": "Welcome back",
     "signInTitle": "Sign in to Vectora",
-    "signInSubtitle": "Admins only. Ask your Super Admin for an account.",
+    "signInSubtitle": "Sign in to continue to your investment group workspace.",
     "email": "Email",
     "password": "Password",
     "signIn": "Sign in",
     "signingIn": "Signing in…",
     "invalidCredentials": "Incorrect email or password.",
-    "noRole": "This account has no Vectora role. Ask your Super Admin to grant access.",
-    "disabled": "This account has been disabled.",
-    "genericError": "Could not sign in. Please try again.",
-    "tooManyRequests": "Too many attempts. Wait a moment and try again.",
     "emailInvalid": "Enter a valid email address",
     "passwordRequired": "Password is required",
     "signedOut": "You have been signed out."
@@ -274,26 +270,9 @@
   "settings": {
     "title": "Settings",
     "profile": "Your profile",
-    "users": "Users and roles",
-    "usersDescription": "Only Super Admins can add users and change roles. Roles are stored as Firebase custom claims and mirrored in Firestore.",
-    "addUser": "Add user",
     "name": "Name",
     "email": "Email",
     "role": "Role",
-    "status": "Status",
-    "active": "Active",
-    "disabled": "Disabled",
-    "temporaryPassword": "Temporary password",
-    "passwordHint": "At least 8 characters. Share it privately; the user can change it later.",
-    "changeRole": "Change role",
-    "disable": "Disable",
-    "enable": "Enable",
-    "you": "You",
-    "userCreated": "User created",
-    "roleUpdated": "Role updated",
-    "statusUpdated": "Status updated",
-    "noUsers": "No users yet.",
-    "readOnly": "You can view your profile. Only Super Admins can manage users.",
-    "cannotChangeSelf": "You cannot change your own role or status."
+    "status": "Status"
   }
 }

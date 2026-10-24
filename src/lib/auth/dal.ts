@@ -1,41 +1,49 @@
 import "server-only";
 
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { cache } from "react";
-import { adminAuth } from "@/lib/firebase/admin";
-import { SESSION_COOKIE } from "@/lib/auth/constants";
+import { createClient } from "@/lib/supabase/server";
 import { hasRole, isUserRole } from "@/lib/auth/roles";
 import type { SessionUser, UserRole } from "@/types";
 
-/**
- * Data Access Layer: the only place that turns the session cookie into a user.
- * The role comes from the verified custom claim, never from client input.
- */
 export const getCurrentUser = cache(async (): Promise<SessionUser | null> => {
-  const sessionCookie = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!sessionCookie) return null;
+  const supabase = await createClient();
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+  const authUser = authData.user;
+  if (authError || !authUser) return null;
 
-  try {
-    const decoded = await adminAuth().verifySessionCookie(sessionCookie, true);
-    const role: unknown = decoded.role;
-    if (!isUserRole(role)) return null;
-    const email = decoded.email ?? "";
-    const name = typeof decoded.name === "string" && decoded.name ? decoded.name : email;
-    return { uid: decoded.uid, email, name, role };
-  } catch {
-    return null;
-  }
+  const { data: membership, error } = await supabase
+    .from("group_memberships")
+    .select("role, group_id, groups(name)")
+    .eq("user_id", authUser.id)
+    .eq("status", "active")
+    .maybeSingle();
+  if (error || !membership || !isUserRole(membership.role)) return null;
+  const group = Array.isArray(membership.groups) ? membership.groups[0] : membership.groups;
+  if (!group?.name) return null;
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name")
+    .eq("id", authUser.id)
+    .maybeSingle();
+  const email = authUser.email ?? "";
+  return {
+    uid: authUser.id,
+    name: profile?.full_name || authUser.user_metadata.full_name || email,
+    email,
+    role: membership.role,
+    groupId: membership.group_id,
+    groupName: group.name,
+  };
 });
 
-/** For pages and layouts: redirects to /login when there is no valid session. */
 export async function requireUser(): Promise<SessionUser> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   return user;
 }
 
-/** For pages: redirects users without the required role back to the dashboard. */
 export async function requireRole(required: UserRole): Promise<SessionUser> {
   const user = await requireUser();
   if (!hasRole(user.role, required)) redirect("/dashboard");
@@ -49,7 +57,6 @@ export class AuthorizationError extends Error {
   }
 }
 
-/** For server actions and route handlers: throws instead of redirecting. */
 export async function assertRole(required: UserRole): Promise<SessionUser> {
   const user = await getCurrentUser();
   if (!user || !hasRole(user.role, required)) throw new AuthorizationError();

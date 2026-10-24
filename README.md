@@ -1,165 +1,73 @@
 # Vectora
 
-Investment group management for monthly investing challenges in Tanzania. Vectora replaces the
-admin's Excel workflow: recording investments (Units / Stock Market), verifying proofs, and
-producing the challenge summary report with column totals and a FINAL TOTAL.
+Investment group management for monthly challenges in Tanzania. Each signup creates a private group workspace. Group data is stored in Supabase Postgres and isolated with Row Level Security (RLS).
 
 ## Stack
 
-- Next.js 16 (App Router, Turbopack), React 19, TypeScript strict
-- Firebase: Auth, Firestore, Cloud Storage, Cloud Functions (v2, Node 22), Emulator Suite
-- Tailwind CSS 4, shadcn/ui (Base UI), TanStack Table, lucide-react, next-themes, sonner
-- ExcelJS for workbook import/export and @react-pdf/renderer for PDF reports
-- react-hook-form + zod 4 (shared schemas for forms and server code)
-- next-intl (English only)
-- Vitest, ESLint 9 (flat config) + Prettier
-
-## Prerequisites
-
-- Node.js 22 or newer (`node -v`; also required for the seed scripts)
-- Java 21 or newer (required by the Firestore/Storage emulators: `java -version`)
-- Firebase CLI: `npm install -g firebase-tools`
+- Next.js 16 App Router, React 19, TypeScript
+- Supabase Auth, Postgres, RLS, and private Storage
+- Tailwind CSS 4, shadcn/ui, TanStack Table, ExcelJS, and PDF reports
+- Zod, React Hook Form, Vitest, ESLint, and Prettier
 
 ## Local setup
 
-```bash
-npm install
-npm --prefix functions install
-cp .env.example .env.local        # emulator defaults, no real credentials needed
-npm run build:functions            # compiles Cloud Functions for the emulator
+1. Create a Supabase project.
+2. Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and the server-only `SUPABASE_SECRET_KEY` from Supabase Project Settings → API Keys.
+3. On a new database, apply migrations `202610230001_initial_multitenant.sql` and then `202610240001_group_admin_invites.sql` in the Supabase Dashboard SQL Editor. If the initial migration is already applied, run only the second migration.
+4. In Supabase Authentication settings, enable email/password signups and email confirmations. Set the Site URL to `http://localhost:3000` and add `http://localhost:3000/**` under allowed redirect URLs. The callback is used for signup confirmation and admin invitations.
+5. Configure Brevo as the custom SMTP provider in Supabase (see below).
+6. Run `npm install` and `npm run dev`.
+7. Open http://localhost:3000/signup. Enter your name, group name, email, and password. Enter the one-time code from the confirmation email to verify your address and open the new group.
 
-# Terminal 1: Firebase emulators (Auth 9099, Firestore 8080, Storage 9199, Functions 5001, UI 4000)
-npm run emulators
+The migrations create the group, membership, profile, investors, challenges, transactions, audit log, admin invitations, and private `proofs` bucket. A database trigger creates a new group and makes the signup user its owner. Normal application reads and writes use the signed-in user's Supabase session; Postgres RLS checks group membership and role. A server-only Supabase secret key is used only to send Auth invitation emails and must never be exposed to the browser.
 
-# Terminal 2: create the first Super Admin (the only way to bootstrap an account)
-npm run seed:admin -- --email you@example.com --password 'ChangeMe123!' --name "Your Name"
+## Signup and groups
 
-# Terminal 2: run the app
-npm run dev
-```
+- Signup asks for the person's name, group name, email, and password. Supabase Auth creates the account and sends its confirmation email. The verification screen accepts an OTP when the email template includes `{{ .Token }}` and also supports the default confirmation link.
+- On account creation, a database trigger creates the profile, a brand-new group, and an `owner` membership atomically. The group name is provided on the signup form; users do not join an existing group during signup.
+- The signup screen verifies the emailed code with Supabase Auth and establishes the session. Sign-in only authenticates an existing account; it does not make another group. The app loads that user's group membership and uses its group ID for all workspace data.
+- The creator is shown as **Super Admin** (database role `owner`). The Super Admin can send up to two email-bound Admin invitations from Settings. Supabase emails the invite link. Invitees use that link to set their name and password; admins can manage group data but only the Super Admin can manage invites or reopen closed challenges. Viewers have read-only access to reports and the dashboard.
+- Every tenant-owned row includes `group_id`. RLS policies and composite foreign keys prevent access across groups, including in direct API calls.
+- Storage paths begin with the group UUID. The `proofs` bucket is private and Storage policies apply the same group membership checks.
+- Investor entries are records inside a group. They are not separate login accounts. Inviting an existing Vectora account or adding member roles beyond Admin still requires a separate membership flow.
 
-To load the deterministic August 2026 sample challenge (46 investors and verified transactions),
-run `npm run seed:sample` after starting the emulators. It reproduces the brief's totals exactly:
-TZS 106,077,627 Units, TZS 31,397,777 Stock Market, and TZS 137,475,404 final. The brief supplies
-only three investor names and aggregate totals, so the remaining sample names are clearly marked
-`Sample Investor 04` through `Sample Investor 46`.
+## Brevo email verification
 
-Open http://localhost:3000 and sign in with the Super Admin you seeded. Add further admins or
-viewers from **Settings → Users and roles**. The Emulator UI is at http://127.0.0.1:4000.
+Supabase Auth sends confirmation messages through Brevo's SMTP relay; the app does not call Brevo directly. In Brevo, authenticate a sending domain, add the SPF/DKIM DNS records Brevo supplies, and create an SMTP key. In Supabase Authentication, go to SMTP Settings, enable custom SMTP, then enter:
 
-`npm run emulators` saves emulator data to `.emulator-data/` when you stop it (Ctrl+C). Use
-`npm run emulators:resume` afterwards to start again with that saved data.
+| Setting  | Value                                                  |
+| -------- | ------------------------------------------------------ |
+| Host     | `smtp-relay.brevo.com`                                 |
+| Port     | `587`                                                  |
+| Username | The SMTP login shown in Brevo (not the host)           |
+| Password | Brevo SMTP key (not the API key or account password)   |
+| Sender   | A verified sender address on your authenticated domain |
 
-## Environment variables
+Set the sender name to `Vectora` and keep email confirmation enabled. The **Confirm signup** template can contain `{{ .Token }}` to send a numeric signup code. Admin invitations use the separate **Invite user** template, which must include `{{ .ConfirmationURL }}` for its setup link. Supabase may require custom SMTP before allowing template edits. Without a domain, use Supabase's default email sender for testing. Keep SMTP credentials in Supabase's dashboard, never in `.env.local` or browser code. The Brevo relay host, supported ports, and SMTP-key requirement are documented in [Brevo's SMTP setup guide](https://help.brevo.com/hc/en-us/articles/7924908994450-Send-transactional-emails-using-Brevo-SMTP).
 
-| Variable                                        | Purpose                                                                                                 |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `NEXT_PUBLIC_USE_FIREBASE_EMULATOR`             | `true` to use the local Emulator Suite                                                                  |
-| `NEXT_PUBLIC_FIREBASE_*`                        | Web app config from Firebase console → Project settings                                                 |
-| `NEXT_PUBLIC_FIREBASE_EMULATOR_HOST`            | Emulator host, default `127.0.0.1`                                                                      |
-| `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | Service account for the Admin SDK in production (not needed on Google Cloud runtimes or with emulators) |
-| `SESSION_EXPIRES_DAYS`                          | Session cookie lifetime, 1–14 days (default 5)                                                          |
+## What the project needs
 
-`.env.local` is git-ignored. Never commit service account keys.
+- A Supabase project: Auth, Postgres, Storage, and the migration in `supabase/migrations/`.
+- A domain and Brevo account: authenticated sender domain, SPF/DKIM records, SMTP key, and transactional email sending enabled.
+- App environment: Supabase project URL, publishable key, secret key, and app origin in `.env.local`; production hosting with those same variables and the production callback URL configured.
+- Operations: backups/retention appropriate for the financial records, access to Supabase and Brevo dashboards, and a process for owner/admin account recovery.
+- Product work not included yet: forgot/reset password screens, group settings/renaming, Admin deactivation, and a Super Admin transfer or group closure flow.
 
-## Authentication and roles
+## Initial data
 
-Roles: `super_admin` (everything, manages users), `admin` (manages data), `viewer` (read-only reports).
+This setup starts with a clean Supabase database. Existing records and accounts from the previous backend are not copied.
 
-- The role lives in a Firebase **custom claim** and is mirrored to `users/{uid}` for display.
-  Only server code (Admin SDK) writes either; Firestore rules deny all client writes to `users`.
-- Sign-in: the browser signs in with Firebase Auth, then exchanges a fresh ID token at
-  `POST /api/auth/session` for an httpOnly `__session` cookie. Accounts without a role are rejected.
-- `src/proxy.ts` redirects requests without a session cookie to `/login` (optimistic check).
-- `src/lib/auth/dal.ts` verifies the cookie (including revocation) on every page, server action and
-  route handler: `requireUser()`, `requireRole()`, `assertRole()`.
-- Changing a user's role or disabling them revokes their tokens, so the change applies immediately.
-- Every user change writes an entry to `auditLogs`.
+## Useful commands
 
-## Scripts
+| Command             | Description                               |
+| ------------------- | ----------------------------------------- |
+| `npm run dev`       | Start the Next.js development server      |
+| `npm run build`     | Create a production build                 |
+| `npm run start`     | Serve the production build                |
+| `npm run lint`      | Run ESLint                                |
+| `npm run typecheck` | Generate route types and check TypeScript |
+| `npm test`          | Run Vitest                                |
 
-| Command                                                 | Description                                         |
-| ------------------------------------------------------- | --------------------------------------------------- |
-| `npm run dev`                                           | Next.js dev server                                  |
-| `npm run build` / `npm start`                           | Production build / serve                            |
-| `npm run lint`                                          | ESLint                                              |
-| `npm run typecheck`                                     | TypeScript (`tsc --noEmit`)                         |
-| `npm test`                                              | Vitest unit tests                                   |
-| `npm run format`                                        | Prettier                                            |
-| `npm run emulators`                                     | Firebase Emulator Suite (saves data on exit)        |
-| `npm run emulators:resume`                              | Emulators, reloading the data saved last time       |
-| `npm run seed:admin -- --email … --password … --name …` | Create or promote a Super Admin                     |
-| `npm run seed:sample`                                   | Load the August 2026 demo challenge (emulator only) |
-| `npm run build:functions`                               | Compile Cloud Functions                             |
+## Environment
 
-## Project structure
-
-```
-src/
-  app/                 routes: /login, (app)/dashboard, challenges, transactions, investors,
-                       reports, import, settings; api/auth/session
-  components/          ui/ (shadcn), layout/ (shell and navigation), providers/
-  features/            auth/, users/ (+ investors, challenges, transactions, reports, import)
-  i18n/                next-intl request config and locale action
-  lib/                 firebase/ (client + admin), auth/ (DAL, roles), validators/, money.ts, audit.ts
-  types/               shared domain types
-  proxy.ts             route protection
-functions/             Cloud Functions (aggregates arrive in Milestone 6)
-messages/              en.json
-scripts/               seed scripts
-firestore.rules, storage.rules, firestore.indexes.json, firebase.json
-```
-
-## Data model
-
-| Path                                          | Contents                                                                                                                                                                     |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users/{uid}`                                 | name, email, role, disabled, createdAt, updatedAt                                                                                                                            |
-| `investors/{investorId}`                      | name, nameLower, phone, notes, status, portalUid (future portal), timestamps                                                                                                 |
-| `challenges/{challengeId}`                    | title, month, year, startDate, endDate, status, totals { units, stock, final, participants }                                                                                 |
-| `challenges/{id}/investorTotals/{investorId}` | units, stock, total (maintained by Cloud Functions)                                                                                                                          |
-| `transactions/{txId}`                         | challengeId, investorId, investorName, type, amount, date, institution, reference, proofUrl, proofPath, rawMessage, notes, status, source, createdBy, verifiedBy, timestamps |
-| `auditLogs/{logId}`                           | entity, entityId, action, before, after, userId, timestamp                                                                                                                   |
-
-All money is stored as whole TZS integers. `src/lib/money.ts` rejects decimals rather than rounding.
-
-## Application workflows
-
-- Investors support create, edit, search, inactive status, guarded deletion, duplicate-name
-  warnings, and Excel/CSV bulk import.
-- Challenges support draft/open/closed states. Only one challenge may be open; closed challenges
-  reject transaction changes. Reopening a closed challenge is restricted to Super Admin and audited.
-- Transactions support fast entry, searchable investor selection, inline investor creation,
-  optional image proof, duplicate warnings, pending/verified/rejected status, filters, and audited
-  create/update/delete/status changes. Proofs are compressed to JPEG before upload.
-- Challenge reports contain the requested investor/type totals, verified-only by default, totals,
-  statements with proof previews, comparisons, and Excel/PDF downloads. Transactions can also be
-  exported to Excel.
-- Excel/CSV migration previews investor mappings and checks Units, Stock Market, and FINAL TOTAL
-  against the source sheet. The server repeats reconciliation before its atomic import batch;
-  mismatched data is never written. Imported rows become verified transactions dated on the
-  challenge end date.
-- Firestore `onDocumentWritten` triggers update challenge and investor aggregates. A transaction
-  marker keyed by the event ID makes retries idempotent; amounts and participant counts are
-  updated together in a Firestore transaction.
-
-Browser Firestore writes are intentionally denied. Authenticated server actions verify the Firebase
-session and custom role, validate inputs using the shared Zod schemas, enforce open-challenge rules,
-and create audit entries. This prevents clients from bypassing verification and audit history.
-Firestore rules restrict reads by role; Storage rules restrict proof writes to role-authorized
-images smaller than 5 MB.
-
-## Deployment
-
-1. Create a Firebase project with Authentication (Email/Password), Firestore, and Storage enabled.
-2. Set the `NEXT_PUBLIC_FIREBASE_*` variables from the Firebase Web App configuration and provide
-   server credentials using Application Default Credentials or `FIREBASE_CLIENT_EMAIL` and
-   `FIREBASE_PRIVATE_KEY`. Keep `.env.local` out of source control.
-3. Deploy Firebase backend resources: `firebase deploy --only firestore:rules,firestore:indexes,storage,functions`.
-4. Deploy the Next.js app to Vercel or Firebase App Hosting and configure the same environment
-   variables. Set `NEXT_PUBLIC_USE_FIREBASE_EMULATOR=false` (or remove it) in production.
-5. Bootstrap the first Super Admin in the production project with
-   `npm run seed:admin -- --email … --password … --name …` from a trusted, credentialed environment.
-
-Before deployment, run `npm run lint`, `npm run typecheck`, `npm test`,
-`npm --prefix functions run build`, and `npm run build`.
+`.env.local` is git-ignored. Keep `SUPABASE_SECRET_KEY` out of browser code and never prefix it with `NEXT_PUBLIC_`; it is required for sending Admin invitation emails. The publishable key is safe for browser use.
